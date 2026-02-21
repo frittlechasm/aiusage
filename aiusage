@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ── config ──────────────────────────────────────────────
+BAR_WIDTH=20
+FILL="█"
+EMPTY="░"
+GREEN="\033[32m"
+YELLOW="\033[33m"
+RED="\033[31m"
+DIM="\033[2m"
+BOLD="\033[1m"
+RESET="\033[0m"
+
+# ── helpers ─────────────────────────────────────────────
+
+draw_bar() {
+  local label="$1" percent="$2"
+  percent="${percent%.*}"
+  [[ -z "$percent" ]] && percent=0
+  ((percent < 0)) && percent=0
+  ((percent > 100)) && percent=100
+
+  local filled=$((percent * BAR_WIDTH / 100))
+  local empty=$((BAR_WIDTH - filled))
+
+  # pick color
+  local color="$GREEN"
+  ((percent >= 60)) && color="$YELLOW"
+  ((percent >= 85)) && color="$RED"
+
+  local bar="${color}"
+  for ((i = 0; i < filled; i++)); do bar+="$FILL"; done
+  bar+="${DIM}"
+  for ((i = 0; i < empty; i++)); do bar+="$EMPTY"; done
+  bar+="${RESET}"
+
+  printf "  %-8s %b %3d%%\n" "$label" "$bar" "$percent"
+}
+
+draw_unavailable() {
+  local label="$1"
+  local bar="${DIM}"
+  for ((i = 0; i < BAR_WIDTH; i++)); do bar+="$EMPTY"; done
+  bar+="${RESET}"
+  printf "  %-8s %b  --%%\n" "$label" "$bar"
+}
+
+http_json() {
+  curl -sf --max-time 10 "$@" 2>/dev/null || echo ""
+}
+
+# ── claude ──────────────────────────────────────────────
+
+fetch_claude() {
+  local creds_file="$HOME/.claude/.credentials.json"
+  local token=""
+
+  if [[ -f "$creds_file" ]]; then
+    token=$(jq -r '.claudeAiOauth.accessToken // empty' "$creds_file" 2>/dev/null)
+  fi
+
+  if [[ -z "$token" ]]; then
+    # try macOS keychain
+    token=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null || true)
+  fi
+
+  if [[ -z "$token" ]]; then
+    draw_unavailable "5h"
+    draw_unavailable "Weekly"
+    return
+  fi
+
+  local resp
+  resp=$(http_json \
+    -H "Authorization: Bearer $token" \
+    -H "anthropic-beta: oauth-2025-04-20" \
+    -H "Accept: application/json" \
+    "https://api.anthropic.com/api/oauth/usage")
+
+  if [[ -z "$resp" ]]; then
+    draw_unavailable "5h"
+    draw_unavailable "Weekly"
+    return
+  fi
+
+  local five_hour seven_day
+  five_hour=$(echo "$resp" | jq -r '.five_hour.utilization // empty' 2>/dev/null)
+  seven_day=$(echo "$resp" | jq -r '.seven_day.utilization // empty' 2>/dev/null)
+
+  if [[ -n "$five_hour" ]]; then
+    draw_bar "5h" "${five_hour%.*}"
+  else
+    draw_unavailable "5h"
+  fi
+
+  if [[ -n "$seven_day" ]]; then
+    draw_bar "Weekly" "${seven_day%.*}"
+  else
+    draw_unavailable "Weekly"
+  fi
+}
+
+# ── codex ───────────────────────────────────────────────
+
+fetch_codex() {
+  local creds_file="${CODEX_HOME:-$HOME/.codex}/auth.json"
+  local token="" account_id=""
+
+  if [[ -f "$creds_file" ]]; then
+    token=$(jq -r '.tokens.access_token // empty' "$creds_file" 2>/dev/null)
+    account_id=$(jq -r '.tokens.account_id // empty' "$creds_file" 2>/dev/null)
+  fi
+
+  if [[ -z "$token" ]]; then
+    draw_unavailable "5h"
+    draw_unavailable "Weekly"
+    return
+  fi
+
+  local headers=(-H "Authorization: Bearer $token" -H "Accept: application/json")
+  [[ -n "$account_id" ]] && headers+=(-H "ChatGPT-Account-Id: $account_id")
+
+  local resp
+  resp=$(http_json "${headers[@]}" "https://chatgpt.com/backend-api/wham/usage")
+
+  if [[ -z "$resp" ]]; then
+    draw_unavailable "5h"
+    draw_unavailable "Weekly"
+    return
+  fi
+
+  local primary secondary
+  primary=$(echo "$resp" | jq -r '.rate_limit.primary_window.used_percent // empty' 2>/dev/null)
+  secondary=$(echo "$resp" | jq -r '.rate_limit.secondary_window.used_percent // empty' 2>/dev/null)
+
+  if [[ -n "$primary" ]]; then
+    draw_bar "5h" "$primary"
+  else
+    draw_unavailable "5h"
+  fi
+
+  if [[ -n "$secondary" ]]; then
+    draw_bar "Weekly" "$secondary"
+  else
+    draw_unavailable "Weekly"
+  fi
+}
+
+# ── main ────────────────────────────────────────────────
+
+printf "\n${BOLD}Claude${RESET}\n"
+fetch_claude
+
+printf "\n${BOLD}Codex${RESET}\n"
+fetch_codex
+
+printf "\n"
