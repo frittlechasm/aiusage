@@ -26,6 +26,12 @@ chmod +x ./aiusage
 ## Usage
 ```bash
 ./aiusage
+
+# Claude only
+./aiusage claude
+
+# Codex only
+./aiusage codex
 ```
 
 ## Notes
