@@ -144,6 +144,140 @@ draw_reset() {
   printf "  %-8s ${DIM}reset: %s${RESET}\n" "" "$reset_text"
 }
 
+SPINNER_FRAMES=('|' '/' '-' '\')
+
+spinner_frame() {
+  local frame="${1:-0}"
+  local idx=$((frame % ${#SPINNER_FRAMES[@]}))
+  printf "%s" "${SPINNER_FRAMES[$idx]}"
+}
+
+clear_render_block() {
+  local lines="${1:-0}" i
+  ((lines <= 0)) && return 0
+
+  printf "\033[%dF" "$lines"
+  for ((i = 0; i < lines; i++)); do
+    printf "\033[2K"
+    if ((i < lines - 1)); then
+      printf "\033[1E"
+    fi
+  done
+  if ((lines > 1)); then
+    printf "\033[%dF" "$((lines - 1))"
+  fi
+}
+
+SECTION_LINES=0
+render_provider_section() {
+  local label="$1" tmp_file="$2" done="$3" frame="$4"
+  local lines=0
+
+  if ((done)); then
+    printf "${BOLD}%s${RESET}\n" "$label"
+    lines=1
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      printf "%s\n" "$line"
+      ((lines++))
+    done < "$tmp_file"
+  else
+    local spin
+    spin=$(spinner_frame "$frame")
+    printf "${BOLD}%s${RESET} ${DIM}%s${RESET}\n" "$label" "$spin"
+    lines=1
+  fi
+
+  SECTION_LINES="$lines"
+}
+
+RENDERED_LINES=0
+render_fetch_state() {
+  local frame="$1"
+  local label1="$2" tmp1="$3" done1="$4"
+  local label2="$5" tmp2="$6" done2="$7" has_second="$8"
+  local lines=0
+
+  render_provider_section "$label1" "$tmp1" "$done1" "$frame"
+  lines=$((lines + SECTION_LINES))
+
+  if ((has_second)); then
+    printf "\n"
+    ((lines++))
+    render_provider_section "$label2" "$tmp2" "$done2" "$frame"
+    lines=$((lines + SECTION_LINES))
+  fi
+
+  RENDERED_LINES="$lines"
+}
+
+wait_and_render_fetches() {
+  local label1="$1" pid1="$2" tmp1="$3"
+  local label2="${4:-}" pid2="${5:-}" tmp2="${6:-}"
+  local has_second=0 frame=0 prev_lines=0
+  local running1 running2 done1 done2
+
+  [[ -n "$pid2" ]] && has_second=1
+
+  while true; do
+    running1=0
+    running2=0
+    done1=0
+    done2=0
+
+    kill -0 "$pid1" 2>/dev/null && running1=1 || done1=1
+    if ((has_second)); then
+      kill -0 "$pid2" 2>/dev/null && running2=1 || done2=1
+    fi
+
+    if [[ -t 1 ]]; then
+      clear_render_block "$prev_lines"
+      render_fetch_state "$frame" "$label1" "$tmp1" "$done1" "$label2" "$tmp2" "$done2" "$has_second"
+      prev_lines="$RENDERED_LINES"
+    fi
+
+    if ((done1)) && ((!has_second || done2)); then
+      break
+    fi
+
+    sleep 0.08
+    ((frame++))
+  done
+
+  wait "$pid1" || true
+  ((has_second)) && wait "$pid2" || true
+
+  if [[ ! -t 1 ]]; then
+    render_fetch_state "$frame" "$label1" "$tmp1" 1 "$label2" "$tmp2" "$has_second" "$has_second"
+  fi
+}
+
+run_provider_with_loading() {
+  local label="$1" fetch_fn="$2"
+  local tmp
+  tmp=$(mktemp)
+
+  "$fetch_fn" >"$tmp" &
+  local pid=$!
+
+  wait_and_render_fetches "$label" "$pid" "$tmp"
+  rm -f "$tmp"
+}
+
+run_all_parallel() {
+  local claude_tmp codex_tmp
+  claude_tmp=$(mktemp)
+  codex_tmp=$(mktemp)
+
+  fetch_claude >"$claude_tmp" &
+  local claude_pid=$!
+
+  fetch_codex >"$codex_tmp" &
+  local codex_pid=$!
+
+  wait_and_render_fetches "Claude" "$claude_pid" "$claude_tmp" "Codex" "$codex_pid" "$codex_tmp"
+  rm -f "$claude_tmp" "$codex_tmp"
+}
+
 # ── claude ──────────────────────────────────────────────
 
 fetch_claude() {
@@ -283,19 +417,13 @@ provider="${1:-all}"
 
 case "$provider" in
 all)
-  printf "\n${BOLD}Claude${RESET}\n"
-  fetch_claude
-
-  printf "\n${BOLD}Codex${RESET}\n"
-  fetch_codex
+  run_all_parallel
   ;;
 claude)
-  printf "\n${BOLD}Claude${RESET}\n"
-  fetch_claude
+  run_provider_with_loading "Claude" fetch_claude
   ;;
 codex)
-  printf "\n${BOLD}Codex${RESET}\n"
-  fetch_codex
+  run_provider_with_loading "Codex" fetch_codex
   ;;
 -h | --help | help)
   usage
