@@ -149,10 +149,45 @@ fetch_codex() {
 
 # ── main ────────────────────────────────────────────────
 
-printf "\n${BOLD}Claude${RESET}\n"
-fetch_claude
+usage() {
+  cat <<'EOF'
+Usage: aiusage [provider]
 
-printf "\n${BOLD}Codex${RESET}\n"
-fetch_codex
+Providers:
+  claude   Show only Claude usage
+  codex    Show only Codex usage
+
+Pass No provider prints both.
+EOF
+}
+
+provider="${1:-all}"
+
+case "$provider" in
+all)
+  printf "\n${BOLD}Claude${RESET}\n"
+  fetch_claude
+
+  printf "\n${BOLD}Codex${RESET}\n"
+  fetch_codex
+  ;;
+claude)
+  printf "\n${BOLD}Claude${RESET}\n"
+  fetch_claude
+  ;;
+codex)
+  printf "\n${BOLD}Codex${RESET}\n"
+  fetch_codex
+  ;;
+-h | --help | help)
+  usage
+  exit 0
+  ;;
+*)
+  printf "Unknown provider: %s\n\n" "$provider" >&2
+  usage >&2
+  exit 1
+  ;;
+esac
 
 printf "\n"
