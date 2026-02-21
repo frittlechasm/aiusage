@@ -9,6 +9,7 @@ Currently supports :
 ## Features
 - Shows `5h` and `Weekly` usage bars for Claude
 - Shows `5h` and `Weekly` usage bars for Codex
+- Shows local reset time for each usage window (when available)
 - No web scraping
 - Single bash script
 
