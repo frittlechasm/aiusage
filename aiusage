@@ -50,6 +50,100 @@ http_json() {
   curl -sf --max-time 10 "$@" 2>/dev/null || echo ""
 }
 
+normalize_epoch() {
+  local raw="${1:-}"
+  [[ -z "$raw" || "$raw" == "null" ]] && return 0
+
+  if [[ "$raw" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    local int="${raw%%.*}"
+    # Convert milliseconds to seconds when timestamps are too large.
+    ((int > 100000000000)) && int=$((int / 1000))
+    echo "$int"
+    return 0
+  fi
+
+  # Claude often returns ISO timestamps with fractional seconds and/or offsets.
+  # Normalize those variants and parse with local `date`.
+  local cleaned
+  cleaned=$(printf "%s" "$raw" | sed -E 's/([0-9])\.[0-9]+/\1/')
+  if [[ "$cleaned" == *Z ]]; then
+    cleaned="${cleaned%Z}+0000"
+  fi
+  cleaned=$(printf "%s" "$cleaned" | sed -E 's/([+-][0-9]{2}):([0-9]{2})$/\1\2/')
+
+  if date -j -f "%Y-%m-%dT%H:%M:%S%z" "$cleaned" "+%s" >/dev/null 2>&1; then
+    date -j -f "%Y-%m-%dT%H:%M:%S%z" "$cleaned" "+%s"
+    return 0
+  fi
+
+  if date -j -f "%Y-%m-%dT%H:%M:%S" "$cleaned" "+%s" >/dev/null 2>&1; then
+    date -j -f "%Y-%m-%dT%H:%M:%S" "$cleaned" "+%s"
+    return 0
+  fi
+
+  # Linux/GNU fallback.
+  date -d "$raw" "+%s" 2>/dev/null || true
+}
+
+format_epoch_local() {
+  local epoch="${1:-}" mode="${2:-datetime}"
+  [[ -z "$epoch" ]] && return 0
+
+  local format="+%b %d %I:%M%p" value=""
+  [[ "$mode" == "time" ]] && format="+%I:%M%p"
+
+  if date -r "$epoch" "$format" >/dev/null 2>&1; then
+    value=$(date -r "$epoch" "$format")
+  else
+    value=$(date -d "@$epoch" "$format" 2>/dev/null || true)
+  fi
+
+  if [[ "$mode" == "time" ]]; then
+    value=$(printf "%s" "$value" | sed -E 's/^0//; s/AM$/am/; s/PM$/pm/')
+  fi
+
+  printf "%s" "$value"
+}
+
+format_remaining() {
+  local seconds="${1:-}"
+  [[ -z "$seconds" ]] && echo "unknown" && return 0
+
+  if ((seconds <= 0)); then
+    echo "now"
+    return 0
+  fi
+
+  local days=$((seconds / 86400))
+  local hours=$(((seconds % 86400) / 3600))
+  local minutes=$(((seconds % 3600) / 60))
+
+  if ((days > 0)); then
+    printf "%dd %dh" "$days" "$hours"
+  elif ((hours > 0)); then
+    printf "%dh %dm" "$hours" "$minutes"
+  else
+    printf "%dm" "$minutes"
+  fi
+}
+
+draw_reset() {
+  local epoch="${1:-}" mode="${2:-datetime}"
+  local reset_text="--"
+
+  if [[ -n "$epoch" ]]; then
+    local formatted now rel
+    formatted=$(format_epoch_local "$epoch" "$mode")
+    if [[ -n "$formatted" ]]; then
+      now=$(date +%s)
+      rel=$(format_remaining $((epoch - now)))
+      reset_text="$formatted ($rel)"
+    fi
+  fi
+
+  printf "  %-8s ${DIM}reset: %s${RESET}\n" "" "$reset_text"
+}
+
 # ── claude ──────────────────────────────────────────────
 
 fetch_claude() {
@@ -67,7 +161,9 @@ fetch_claude() {
 
   if [[ -z "$token" ]]; then
     draw_unavailable "5h"
+    draw_reset "" "time"
     draw_unavailable "Weekly"
+    draw_reset ""
     return
   fi
 
@@ -80,25 +176,35 @@ fetch_claude() {
 
   if [[ -z "$resp" ]]; then
     draw_unavailable "5h"
+    draw_reset "" "time"
     draw_unavailable "Weekly"
+    draw_reset ""
     return
   fi
 
-  local five_hour seven_day
+  local five_hour seven_day five_hour_reset seven_day_reset
   five_hour=$(echo "$resp" | jq -r '.five_hour.utilization // empty' 2>/dev/null)
   seven_day=$(echo "$resp" | jq -r '.seven_day.utilization // empty' 2>/dev/null)
+  five_hour_reset=$(echo "$resp" | jq -r '.five_hour.reset_at // .five_hour.resets_at // .five_hour.resetAt // .five_hour.resetsAt // .five_hour.window_end // .five_hour.window_end_at // .five_hour.windowEnd // .five_hour.windowEndAt // empty' 2>/dev/null)
+  seven_day_reset=$(echo "$resp" | jq -r '.seven_day.reset_at // .seven_day.resets_at // .seven_day.resetAt // .seven_day.resetsAt // .seven_day.window_end // .seven_day.window_end_at // .seven_day.windowEnd // .seven_day.windowEndAt // empty' 2>/dev/null)
+
+  local five_hour_reset_epoch seven_day_reset_epoch
+  five_hour_reset_epoch=$(normalize_epoch "$five_hour_reset")
+  seven_day_reset_epoch=$(normalize_epoch "$seven_day_reset")
 
   if [[ -n "$five_hour" ]]; then
     draw_bar "5h" "${five_hour%.*}"
   else
     draw_unavailable "5h"
   fi
+  draw_reset "$five_hour_reset_epoch" "time"
 
   if [[ -n "$seven_day" ]]; then
     draw_bar "Weekly" "${seven_day%.*}"
   else
     draw_unavailable "Weekly"
   fi
+  draw_reset "$seven_day_reset_epoch"
 }
 
 # ── codex ───────────────────────────────────────────────
@@ -114,7 +220,9 @@ fetch_codex() {
 
   if [[ -z "$token" ]]; then
     draw_unavailable "5h"
+    draw_reset "" "time"
     draw_unavailable "Weekly"
+    draw_reset ""
     return
   fi
 
@@ -126,25 +234,35 @@ fetch_codex() {
 
   if [[ -z "$resp" ]]; then
     draw_unavailable "5h"
+    draw_reset "" "time"
     draw_unavailable "Weekly"
+    draw_reset ""
     return
   fi
 
-  local primary secondary
+  local primary secondary primary_reset secondary_reset
   primary=$(echo "$resp" | jq -r '.rate_limit.primary_window.used_percent // empty' 2>/dev/null)
   secondary=$(echo "$resp" | jq -r '.rate_limit.secondary_window.used_percent // empty' 2>/dev/null)
+  primary_reset=$(echo "$resp" | jq -r '.rate_limit.primary_window.reset_at // .rate_limit.primary_window.resets_at // .rate_limit.primary_window.resetAt // .rate_limit.primary_window.resetsAt // .rate_limit.primary_window.window_end // .rate_limit.primary_window.window_end_at // .rate_limit.primary_window.windowEnd // .rate_limit.primary_window.windowEndAt // empty' 2>/dev/null)
+  secondary_reset=$(echo "$resp" | jq -r '.rate_limit.secondary_window.reset_at // .rate_limit.secondary_window.resets_at // .rate_limit.secondary_window.resetAt // .rate_limit.secondary_window.resetsAt // .rate_limit.secondary_window.window_end // .rate_limit.secondary_window.window_end_at // .rate_limit.secondary_window.windowEnd // .rate_limit.secondary_window.windowEndAt // empty' 2>/dev/null)
+
+  local primary_reset_epoch secondary_reset_epoch
+  primary_reset_epoch=$(normalize_epoch "$primary_reset")
+  secondary_reset_epoch=$(normalize_epoch "$secondary_reset")
 
   if [[ -n "$primary" ]]; then
     draw_bar "5h" "$primary"
   else
     draw_unavailable "5h"
   fi
+  draw_reset "$primary_reset_epoch" "time"
 
   if [[ -n "$secondary" ]]; then
     draw_bar "Weekly" "$secondary"
   else
     draw_unavailable "Weekly"
   fi
+  draw_reset "$secondary_reset_epoch"
 }
 
 # ── main ────────────────────────────────────────────────
