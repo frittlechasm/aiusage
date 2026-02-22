@@ -1,3 +1,5 @@
+![aiusage screenshot](img.png)
+
 # aiusage
 
 Simple CLI command to check usage limits of your AI Subscription usage. 
