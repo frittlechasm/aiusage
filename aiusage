@@ -46,6 +46,13 @@ draw_unavailable() {
   printf "  %-8s %b  --%%\n" "$label" "$bar"
 }
 
+draw_unavailable_section() {
+  draw_unavailable "5h"
+  draw_reset "" "time"
+  draw_unavailable "Weekly"
+  draw_reset ""
+}
+
 http_json() {
   curl -sf --max-time 10 "$@" 2>/dev/null || echo ""
 }
@@ -244,7 +251,7 @@ wait_and_render_fetches() {
   done
 
   wait "$pid1" || true
-  ((has_second)) && wait "$pid2" || true
+  ((has_second)) && { wait "$pid2" || true; }
 
   if [[ ! -t 1 ]]; then
     render_fetch_state "$frame" "$label1" "$tmp1" 1 "$label2" "$tmp2" "$has_second" "$has_second"
@@ -253,29 +260,35 @@ wait_and_render_fetches() {
 
 run_provider_with_loading() {
   local label="$1" fetch_fn="$2"
-  local tmp
+  local tmp pid
   tmp=$(mktemp)
 
   "$fetch_fn" >"$tmp" &
-  local pid=$!
+  pid=$!
+
+  trap 'rm -f "$tmp"; kill "$pid" 2>/dev/null' EXIT INT TERM
 
   wait_and_render_fetches "$label" "$pid" "$tmp"
   rm -f "$tmp"
+  trap - EXIT INT TERM
 }
 
 run_all_parallel() {
-  local claude_tmp codex_tmp
+  local claude_tmp codex_tmp claude_pid codex_pid
   claude_tmp=$(mktemp)
   codex_tmp=$(mktemp)
 
   fetch_claude >"$claude_tmp" &
-  local claude_pid=$!
+  claude_pid=$!
 
   fetch_codex >"$codex_tmp" &
-  local codex_pid=$!
+  codex_pid=$!
+
+  trap 'rm -f "$claude_tmp" "$codex_tmp"; kill "$claude_pid" "$codex_pid" 2>/dev/null' EXIT INT TERM
 
   wait_and_render_fetches "Claude" "$claude_pid" "$claude_tmp" "Codex" "$codex_pid" "$codex_tmp"
   rm -f "$claude_tmp" "$codex_tmp"
+  trap - EXIT INT TERM
 }
 
 # ── claude ──────────────────────────────────────────────
@@ -294,10 +307,7 @@ fetch_claude() {
   fi
 
   if [[ -z "$token" ]]; then
-    draw_unavailable "5h"
-    draw_reset "" "time"
-    draw_unavailable "Weekly"
-    draw_reset ""
+    draw_unavailable_section
     return
   fi
 
@@ -309,18 +319,18 @@ fetch_claude() {
     "https://api.anthropic.com/api/oauth/usage")
 
   if [[ -z "$resp" ]]; then
-    draw_unavailable "5h"
-    draw_reset "" "time"
-    draw_unavailable "Weekly"
-    draw_reset ""
+    draw_unavailable_section
     return
   fi
 
   local five_hour seven_day five_hour_reset seven_day_reset
-  five_hour=$(echo "$resp" | jq -r '.five_hour.utilization // empty' 2>/dev/null)
-  seven_day=$(echo "$resp" | jq -r '.seven_day.utilization // empty' 2>/dev/null)
-  five_hour_reset=$(echo "$resp" | jq -r '.five_hour.reset_at // .five_hour.resets_at // .five_hour.resetAt // .five_hour.resetsAt // .five_hour.window_end // .five_hour.window_end_at // .five_hour.windowEnd // .five_hour.windowEndAt // empty' 2>/dev/null)
-  seven_day_reset=$(echo "$resp" | jq -r '.seven_day.reset_at // .seven_day.resets_at // .seven_day.resetAt // .seven_day.resetsAt // .seven_day.window_end // .seven_day.window_end_at // .seven_day.windowEnd // .seven_day.windowEndAt // empty' 2>/dev/null)
+  IFS=$'\t' read -r five_hour seven_day five_hour_reset seven_day_reset < <(
+    printf '%s' "$resp" | jq -r 'def first_reset(w): w.reset_at // w.resets_at // w.resetAt // w.resetsAt // w.window_end // w.window_end_at // w.windowEnd // w.windowEndAt;
+      [(.five_hour.utilization // ""),
+       (.seven_day.utilization // ""),
+       (first_reset(.five_hour) // ""),
+       (first_reset(.seven_day) // "")] | @tsv' 2>/dev/null
+  )
 
   local five_hour_reset_epoch seven_day_reset_epoch
   five_hour_reset_epoch=$(normalize_epoch "$five_hour_reset")
@@ -353,10 +363,7 @@ fetch_codex() {
   fi
 
   if [[ -z "$token" ]]; then
-    draw_unavailable "5h"
-    draw_reset "" "time"
-    draw_unavailable "Weekly"
-    draw_reset ""
+    draw_unavailable_section
     return
   fi
 
@@ -367,18 +374,18 @@ fetch_codex() {
   resp=$(http_json "${headers[@]}" "https://chatgpt.com/backend-api/wham/usage")
 
   if [[ -z "$resp" ]]; then
-    draw_unavailable "5h"
-    draw_reset "" "time"
-    draw_unavailable "Weekly"
-    draw_reset ""
+    draw_unavailable_section
     return
   fi
 
   local primary secondary primary_reset secondary_reset
-  primary=$(echo "$resp" | jq -r '.rate_limit.primary_window.used_percent // empty' 2>/dev/null)
-  secondary=$(echo "$resp" | jq -r '.rate_limit.secondary_window.used_percent // empty' 2>/dev/null)
-  primary_reset=$(echo "$resp" | jq -r '.rate_limit.primary_window.reset_at // .rate_limit.primary_window.resets_at // .rate_limit.primary_window.resetAt // .rate_limit.primary_window.resetsAt // .rate_limit.primary_window.window_end // .rate_limit.primary_window.window_end_at // .rate_limit.primary_window.windowEnd // .rate_limit.primary_window.windowEndAt // empty' 2>/dev/null)
-  secondary_reset=$(echo "$resp" | jq -r '.rate_limit.secondary_window.reset_at // .rate_limit.secondary_window.resets_at // .rate_limit.secondary_window.resetAt // .rate_limit.secondary_window.resetsAt // .rate_limit.secondary_window.window_end // .rate_limit.secondary_window.window_end_at // .rate_limit.secondary_window.windowEnd // .rate_limit.secondary_window.windowEndAt // empty' 2>/dev/null)
+  IFS=$'\t' read -r primary secondary primary_reset secondary_reset < <(
+    printf '%s' "$resp" | jq -r 'def first_reset(w): w.reset_at // w.resets_at // w.resetAt // w.resetsAt // w.window_end // w.window_end_at // w.windowEnd // w.windowEndAt;
+      [(.rate_limit.primary_window.used_percent // ""),
+       (.rate_limit.secondary_window.used_percent // ""),
+       (first_reset(.rate_limit.primary_window) // ""),
+       (first_reset(.rate_limit.secondary_window) // "")] | @tsv' 2>/dev/null
+  )
 
   local primary_reset_epoch secondary_reset_epoch
   primary_reset_epoch=$(normalize_epoch "$primary_reset")
@@ -409,7 +416,7 @@ Providers:
   claude   Show only Claude usage
   codex    Show only Codex usage
 
-Pass No provider prints both.
+Omit provider to print both.
 EOF
 }
 
