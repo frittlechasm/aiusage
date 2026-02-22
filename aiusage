@@ -266,7 +266,10 @@ run_provider_with_loading() {
   "$fetch_fn" >"$tmp" &
   pid=$!
 
-  trap 'rm -f "$tmp"; kill "$pid" 2>/dev/null' EXIT INT TERM
+  cleanup() { rm -f "$tmp"; kill "$pid" 2>/dev/null; }
+  trap 'cleanup; trap - INT;  kill -INT  $$' INT
+  trap 'cleanup; trap - TERM; kill -TERM $$' TERM
+  trap 'cleanup' EXIT
 
   wait_and_render_fetches "$label" "$pid" "$tmp"
   rm -f "$tmp"
@@ -284,7 +287,10 @@ run_all_parallel() {
   fetch_codex >"$codex_tmp" &
   codex_pid=$!
 
-  trap 'rm -f "$claude_tmp" "$codex_tmp"; kill "$claude_pid" "$codex_pid" 2>/dev/null' EXIT INT TERM
+  cleanup() { rm -f "$claude_tmp" "$codex_tmp"; kill "$claude_pid" "$codex_pid" 2>/dev/null; }
+  trap 'cleanup; trap - INT;  kill -INT  $$' INT
+  trap 'cleanup; trap - TERM; kill -TERM $$' TERM
+  trap 'cleanup' EXIT
 
   wait_and_render_fetches "Claude" "$claude_pid" "$claude_tmp" "Codex" "$codex_pid" "$codex_tmp"
   rm -f "$claude_tmp" "$codex_tmp"
