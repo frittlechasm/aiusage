@@ -57,6 +57,14 @@ http_json() {
   curl -sf --max-time 10 "$@" 2>/dev/null || echo ""
 }
 
+provider_available() {
+  case "$1" in
+    claude) command -v claude >/dev/null 2>&1 ;;
+    codex)  command -v codex  >/dev/null 2>&1 ;;
+    *)      return 1 ;;
+  esac
+}
+
 normalize_epoch() {
   local raw="${1:-}"
   [[ -z "$raw" || "$raw" == "null" ]] && return 0
@@ -277,6 +285,23 @@ run_provider_with_loading() {
 }
 
 run_all_parallel() {
+  local has_claude=0 has_codex=0
+  if provider_available claude; then has_claude=1; fi
+  if provider_available codex;  then has_codex=1;  fi
+
+  if ((has_claude && !has_codex)); then
+    run_provider_with_loading "Claude" fetch_claude
+    return
+  fi
+  if ((!has_claude && has_codex)); then
+    run_provider_with_loading "Codex" fetch_codex
+    return
+  fi
+  if ((!has_claude && !has_codex)); then
+    printf "No AI providers found (claude, codex).\n" >&2
+    return 1
+  fi
+
   local claude_tmp codex_tmp claude_pid codex_pid
   claude_tmp=$(mktemp)
   codex_tmp=$(mktemp)
@@ -433,9 +458,17 @@ all)
   run_all_parallel
   ;;
 claude)
+  if ! provider_available claude; then
+    printf "claude is not installed\n" >&2
+    exit 1
+  fi
   run_provider_with_loading "Claude" fetch_claude
   ;;
 codex)
+  if ! provider_available codex; then
+    printf "codex is not installed\n" >&2
+    exit 1
+  fi
   run_provider_with_loading "Codex" fetch_codex
   ;;
 -h | --help | help)
