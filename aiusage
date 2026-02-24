@@ -247,7 +247,7 @@ wait_and_render_fetches() {
     fi
 
     sleep 0.08
-    ((frame++))
+    frame=$((frame + 1))
   done
 
   wait "$pid1" || true
