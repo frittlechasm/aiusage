@@ -46,6 +46,11 @@ draw_unavailable() {
   printf "  %-8s %b  --%%\n" "$label" "$bar"
 }
 
+draw_error() {
+  local msg="$1"
+  printf "  ${RED}error:${RESET} %s\n" "$msg"
+}
+
 draw_unavailable_section() {
   draw_unavailable "5h"
   draw_reset "" "time"
@@ -54,7 +59,12 @@ draw_unavailable_section() {
 }
 
 http_json() {
-  curl -sf --max-time 10 "$@" 2>/dev/null || echo ""
+  local tmp_body status
+  tmp_body=$(mktemp)
+  status=$(curl -s --max-time 10 -w "%{http_code}" -o "$tmp_body" "$@" 2>/dev/null || echo "000")
+  [[ -n "${HTTP_STATUS_FILE:-}" ]] && printf "%s" "$status" >"$HTTP_STATUS_FILE"
+  cat "$tmp_body"
+  rm -f "$tmp_body"
 }
 
 provider_available() {
@@ -194,7 +204,7 @@ render_provider_section() {
     while IFS= read -r line || [[ -n "$line" ]]; do
       printf "%s\n" "$line"
       ((lines++))
-    done < "$tmp_file"
+    done <"$tmp_file"
   else
     local spin
     spin=$(spinner_frame "$frame")
@@ -274,7 +284,10 @@ run_provider_with_loading() {
   "$fetch_fn" >"$tmp" &
   pid=$!
 
-  cleanup() { rm -f "$tmp"; kill "$pid" 2>/dev/null; }
+  cleanup() {
+    rm -f "$tmp"
+    kill "$pid" 2>/dev/null
+  }
   trap 'cleanup; trap - INT;  kill -INT  $$' INT
   trap 'cleanup; trap - TERM; kill -TERM $$' TERM
   trap 'cleanup' EXIT
@@ -312,7 +325,10 @@ run_all_parallel() {
   fetch_codex >"$codex_tmp" &
   codex_pid=$!
 
-  cleanup() { rm -f "$claude_tmp" "$codex_tmp"; kill "$claude_pid" "$codex_pid" 2>/dev/null; }
+  cleanup() {
+    rm -f "$claude_tmp" "$codex_tmp"
+    kill "$claude_pid" "$codex_pid" 2>/dev/null
+  }
   trap 'cleanup; trap - INT;  kill -INT  $$' INT
   trap 'cleanup; trap - TERM; kill -TERM $$' TERM
   trap 'cleanup' EXIT
@@ -338,19 +354,26 @@ fetch_claude() {
   fi
 
   if [[ -z "$token" ]]; then
-    draw_unavailable_section
+    draw_error "not logged in run: claude /login"
     return
   fi
 
-  local resp
-  resp=$(http_json \
+  local _sf resp _status
+  _sf=$(mktemp)
+  resp=$(HTTP_STATUS_FILE="$_sf" http_json \
     -H "Authorization: Bearer $token" \
     -H "anthropic-beta: oauth-2025-04-20" \
     -H "Accept: application/json" \
     "https://api.anthropic.com/api/oauth/usage")
+  _status=$(cat "$_sf" 2>/dev/null || echo "000")
+  rm -f "$_sf"
 
-  if [[ -z "$resp" ]]; then
-    draw_unavailable_section
+  if [[ "$_status" != 2* ]] || [[ -z "$resp" ]]; then
+    case "$_status" in
+    401 | 403) draw_error "session expired run: claude /login" ;;
+    000) draw_error "network error or request timed out" ;;
+    *) draw_error "request failed (HTTP $_status)" ;;
+    esac
     return
   fi
 
@@ -394,18 +417,25 @@ fetch_codex() {
   fi
 
   if [[ -z "$token" ]]; then
-    draw_unavailable_section
+    draw_error "not logged in run: codex login"
     return
   fi
 
   local headers=(-H "Authorization: Bearer $token" -H "Accept: application/json")
   [[ -n "$account_id" ]] && headers+=(-H "ChatGPT-Account-Id: $account_id")
 
-  local resp
-  resp=$(http_json "${headers[@]}" "https://chatgpt.com/backend-api/wham/usage")
+  local _sf resp _status
+  _sf=$(mktemp)
+  resp=$(HTTP_STATUS_FILE="$_sf" http_json "${headers[@]}" "https://chatgpt.com/backend-api/wham/usage")
+  _status=$(cat "$_sf" 2>/dev/null || echo "000")
+  rm -f "$_sf"
 
-  if [[ -z "$resp" ]]; then
-    draw_unavailable_section
+  if [[ "$_status" != 2* ]] || [[ -z "$resp" ]]; then
+    case "$_status" in
+    401 | 403) draw_error "session expired log in to Codex again" ;;
+    000) draw_error "network error or request timed out" ;;
+    *) draw_error "request failed (HTTP $_status)" ;;
+    esac
     return
   fi
 
