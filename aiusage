@@ -51,6 +51,14 @@ draw_error() {
   printf "  ${RED}error:${RESET} %s\n" "$msg"
 }
 
+draw_credits_line() {
+  local used="$1" limit="$2"
+  local used_fmt limit_fmt
+  used_fmt=$(awk "BEGIN{printf \"%.2f\", $used/100}" 2>/dev/null || echo "$used")
+  limit_fmt=$(awk "BEGIN{printf \"%.2f\", $limit/100}" 2>/dev/null || echo "$limit")
+  printf "  %-8s ${DIM}\$%s / \$%s${RESET}\n" "" "$used_fmt" "$limit_fmt"
+}
+
 draw_unavailable_section() {
   draw_unavailable "5h"
   draw_reset "" "time"
@@ -69,9 +77,9 @@ http_json() {
 
 provider_available() {
   case "$1" in
-    claude) command -v claude >/dev/null 2>&1 ;;
-    codex)  command -v codex  >/dev/null 2>&1 ;;
-    *)      return 1 ;;
+  claude) command -v claude >/dev/null 2>&1 ;;
+  codex) command -v codex >/dev/null 2>&1 ;;
+  *) return 1 ;;
   esac
 }
 
@@ -300,7 +308,7 @@ run_provider_with_loading() {
 run_all_parallel() {
   local has_claude=0 has_codex=0
   if provider_available claude; then has_claude=1; fi
-  if provider_available codex;  then has_codex=1;  fi
+  if provider_available codex; then has_codex=1; fi
 
   if ((has_claude && !has_codex)); then
     run_provider_with_loading "Claude" fetch_claude
@@ -403,6 +411,24 @@ fetch_claude() {
     draw_unavailable "Weekly"
   fi
   draw_reset "$seven_day_reset_epoch"
+
+  local extra_enabled extra_util extra_used extra_limit
+  IFS=$'\t' read -r extra_enabled extra_util extra_used extra_limit < <(
+    printf '%s' "$resp" | jq -r '[(.extra_usage.is_enabled // false | tostring),
+       (.extra_usage.utilization // ""),
+       (.extra_usage.used_credits // ""),
+       (.extra_usage.monthly_limit // "")] | @tsv' 2>/dev/null
+  )
+
+  if [[ "$extra_enabled" == "true" && -n "$extra_limit" && "$extra_limit" != "0" && "$extra_limit" != "null" ]]; then
+    printf "\n"
+    if [[ -n "$extra_util" ]]; then
+      draw_bar "Extra" "${extra_util%.*}"
+    else
+      draw_unavailable "Extra"
+    fi
+    draw_credits_line "${extra_used:-0}" "$extra_limit"
+  fi
 }
 
 # ── codex ───────────────────────────────────────────────
