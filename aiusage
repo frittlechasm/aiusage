@@ -12,6 +12,16 @@ DIM="\033[2m"
 BOLD="\033[1m"
 RESET="\033[0m"
 
+# Disable ANSI escapes for non-interactive output and NO_COLOR terminals.
+if [[ ! -t 1 || -n "${NO_COLOR:-}" || "${TERM:-}" == "dumb" ]]; then
+  GREEN=""
+  YELLOW=""
+  RED=""
+  DIM=""
+  BOLD=""
+  RESET=""
+fi
+
 # ── helpers ─────────────────────────────────────────────
 
 draw_bar() {
@@ -59,17 +69,15 @@ draw_credits_line() {
   printf "  %-8s ${DIM}\$%s / \$%s${RESET}\n" "" "$used_fmt" "$limit_fmt"
 }
 
-draw_unavailable_section() {
-  draw_unavailable "5h"
-  draw_reset "" "time"
-  draw_unavailable "Weekly"
-  draw_reset ""
-}
-
 http_json() {
   local tmp_body status
   tmp_body=$(mktemp)
-  status=$(curl -s --max-time 10 -w "%{http_code}" -o "$tmp_body" "$@" 2>/dev/null || echo "000")
+
+  if ! status=$(curl -s --max-time 10 -w "%{http_code}" -o "$tmp_body" "$@" 2>/dev/null); then
+    status="000"
+  fi
+  [[ "$status" =~ ^[0-9]{3}$ ]] || status="000"
+
   [[ -n "${HTTP_STATUS_FILE:-}" ]] && printf "%s" "$status" >"$HTTP_STATUS_FILE"
   cat "$tmp_body"
   rm -f "$tmp_body"
