@@ -87,8 +87,60 @@ provider_available() {
   case "$1" in
   claude) command -v claude >/dev/null 2>&1 ;;
   codex) command -v codex >/dev/null 2>&1 ;;
+  gemini) command -v gemini >/dev/null 2>&1 ;;
+  jetbrains) [[ -n "$(find_jetbrains_quota_file)" ]] ;;
   *) return 1 ;;
   esac
+}
+
+find_jetbrains_quota_file() {
+  local roots=()
+  [[ -d "$HOME/Library/Application Support/JetBrains" ]] && roots+=("$HOME/Library/Application Support/JetBrains")
+  [[ -d "${XDG_CONFIG_HOME:-$HOME/.config}/JetBrains" ]] && roots+=("${XDG_CONFIG_HOME:-$HOME/.config}/JetBrains")
+  (( ${#roots[@]} == 0 )) && return 0
+
+  local file newest_file="" newest_mtime=0 mtime
+  while IFS= read -r file; do
+    mtime=$(stat -f "%m" "$file" 2>/dev/null || stat -c "%Y" "$file" 2>/dev/null || echo 0)
+    if ((mtime > newest_mtime)); then
+      newest_mtime="$mtime"
+      newest_file="$file"
+    fi
+  done < <(find "${roots[@]}" -path "*/options/AIAssistantQuotaManager2.xml" -type f 2>/dev/null)
+
+  printf "%s" "$newest_file"
+}
+
+xml_unescape() {
+  local value="${1:-}"
+  value="${value//&quot;/\"}"
+  value="${value//&#10;/$'\n'}"
+  value="${value//&#13;/$'\r'}"
+  value="${value//&apos;/\'}"
+  value="${value//&lt;/<}"
+  value="${value//&gt;/>}"
+  value="${value//&amp;/&}"
+  printf "%s" "$value"
+}
+
+duration_to_label() {
+  local duration="${1:-}"
+  if [[ "$duration" =~ ^PT([0-9]+)H$ ]]; then
+    local hours="${BASH_REMATCH[1]}"
+    if ((hours % 24 == 0)); then
+      printf "%sd" "$((hours / 24))"
+      return 0
+    fi
+    printf "%sh" "$hours"
+    return 0
+  fi
+
+  if [[ "$duration" =~ ^P([0-9]+)D$ ]]; then
+    printf "%sd" "${BASH_REMATCH[1]}"
+    return 0
+  fi
+
+  printf "Credits"
 }
 
 normalize_epoch() {
@@ -186,6 +238,7 @@ draw_reset() {
 }
 
 SPINNER_FRAMES=('|' '/' '-' '\')
+CURSOR_HIDDEN=0
 
 spinner_frame() {
   local frame="${1:-0}"
@@ -193,20 +246,46 @@ spinner_frame() {
   printf "%s" "${SPINNER_FRAMES[$idx]}"
 }
 
-clear_render_block() {
-  local lines="${1:-0}" i
+hide_cursor() {
+  if [[ -t 1 && $CURSOR_HIDDEN -eq 0 ]]; then
+    printf "\033[?25l"
+    CURSOR_HIDDEN=1
+  fi
+}
+
+show_cursor() {
+  if [[ -t 1 && $CURSOR_HIDDEN -eq 1 ]]; then
+    printf "\033[?25h"
+    CURSOR_HIDDEN=0
+  fi
+}
+
+move_to_render_start() {
+  local lines="${1:-0}"
   ((lines <= 0)) && return 0
 
   printf "\033[%dF" "$lines"
+}
+
+render_line() {
+  printf "\033[2K%s\n" "$1"
+}
+
+render_heading_line() {
+  printf "\033[2K%b%s%b\n" "$BOLD" "$1" "$RESET"
+}
+
+render_spinner_line() {
+  printf "\033[2K%b%s%b %b%s%b\n" "$BOLD" "$1" "$RESET" "$DIM" "$2" "$RESET"
+}
+
+clear_extra_render_lines() {
+  local lines="${1:-0}" i
+  ((lines <= 0)) && return 0
+
   for ((i = 0; i < lines; i++)); do
-    printf "\033[2K"
-    if ((i < lines - 1)); then
-      printf "\033[1E"
-    fi
+    printf "\033[2K\n"
   done
-  if ((lines > 1)); then
-    printf "\033[%dF" "$((lines - 1))"
-  fi
 }
 
 SECTION_LINES=0
@@ -215,16 +294,16 @@ render_provider_section() {
   local lines=0
 
   if ((done)); then
-    printf "${BOLD}%s${RESET}\n" "$label"
+    render_heading_line "$label"
     lines=1
     while IFS= read -r line || [[ -n "$line" ]]; do
-      printf "%s\n" "$line"
+      render_line "$line"
       ((lines++))
     done <"$tmp_file"
   else
     local spin
     spin=$(spinner_frame "$frame")
-    printf "${BOLD}%s${RESET} ${DIM}%s${RESET}\n" "$label" "$spin"
+    render_spinner_line "$label" "$spin"
     lines=1
   fi
 
@@ -236,15 +315,31 @@ render_fetch_state() {
   local frame="$1"
   local label1="$2" tmp1="$3" done1="$4"
   local label2="$5" tmp2="$6" done2="$7" has_second="$8"
+  local label3="${9:-}" tmp3="${10:-}" done3="${11:-0}" has_third="${12:-0}"
+  local label4="${13:-}" tmp4="${14:-}" done4="${15:-0}" has_fourth="${16:-0}"
   local lines=0
 
   render_provider_section "$label1" "$tmp1" "$done1" "$frame"
   lines=$((lines + SECTION_LINES))
 
   if ((has_second)); then
-    printf "\n"
+    render_line ""
     ((lines++))
     render_provider_section "$label2" "$tmp2" "$done2" "$frame"
+    lines=$((lines + SECTION_LINES))
+  fi
+
+  if ((has_third)); then
+    render_line ""
+    ((lines++))
+    render_provider_section "$label3" "$tmp3" "$done3" "$frame"
+    lines=$((lines + SECTION_LINES))
+  fi
+
+  if ((has_fourth)); then
+    render_line ""
+    ((lines++))
+    render_provider_section "$label4" "$tmp4" "$done4" "$frame"
     lines=$((lines + SECTION_LINES))
   fi
 
@@ -254,29 +349,43 @@ render_fetch_state() {
 wait_and_render_fetches() {
   local label1="$1" pid1="$2" tmp1="$3"
   local label2="${4:-}" pid2="${5:-}" tmp2="${6:-}"
-  local has_second=0 frame=0 prev_lines=0
-  local running1 running2 done1 done2
+  local label3="${7:-}" pid3="${8:-}" tmp3="${9:-}"
+  local label4="${10:-}" pid4="${11:-}" tmp4="${12:-}"
+  local has_second=0 has_third=0 has_fourth=0 frame=0 prev_lines=0
+  local done1 done2 done3 done4
 
   [[ -n "$pid2" ]] && has_second=1
+  [[ -n "$pid3" ]] && has_third=1
+  [[ -n "$pid4" ]] && has_fourth=1
 
+  hide_cursor
   while true; do
-    running1=0
-    running2=0
     done1=0
     done2=0
+    done3=0
+    done4=0
 
-    kill -0 "$pid1" 2>/dev/null && running1=1 || done1=1
+    kill -0 "$pid1" 2>/dev/null || done1=1
     if ((has_second)); then
-      kill -0 "$pid2" 2>/dev/null && running2=1 || done2=1
+      kill -0 "$pid2" 2>/dev/null || done2=1
+    fi
+    if ((has_third)); then
+      kill -0 "$pid3" 2>/dev/null || done3=1
+    fi
+    if ((has_fourth)); then
+      kill -0 "$pid4" 2>/dev/null || done4=1
     fi
 
     if [[ -t 1 ]]; then
-      clear_render_block "$prev_lines"
-      render_fetch_state "$frame" "$label1" "$tmp1" "$done1" "$label2" "$tmp2" "$done2" "$has_second"
-      prev_lines="$RENDERED_LINES"
+      move_to_render_start "$prev_lines"
+      render_fetch_state "$frame" "$label1" "$tmp1" "$done1" "$label2" "$tmp2" "$done2" "$has_second" "$label3" "$tmp3" "$done3" "$has_third" "$label4" "$tmp4" "$done4" "$has_fourth"
+      clear_extra_render_lines $((prev_lines - RENDERED_LINES))
+      if ((RENDERED_LINES > prev_lines)); then
+        prev_lines="$RENDERED_LINES"
+      fi
     fi
 
-    if ((done1)) && ((!has_second || done2)); then
+    if ((done1)) && ((!has_second || done2)) && ((!has_third || done3)) && ((!has_fourth || done4)); then
       break
     fi
 
@@ -286,10 +395,14 @@ wait_and_render_fetches() {
 
   wait "$pid1" || true
   ((has_second)) && { wait "$pid2" || true; }
+  ((has_third)) && { wait "$pid3" || true; }
+  ((has_fourth)) && { wait "$pid4" || true; }
 
   if [[ ! -t 1 ]]; then
-    render_fetch_state "$frame" "$label1" "$tmp1" 1 "$label2" "$tmp2" "$has_second" "$has_second"
+    render_fetch_state "$frame" "$label1" "$tmp1" 1 "$label2" "$tmp2" "$has_second" "$has_second" "$label3" "$tmp3" "$has_third" "$has_third" "$label4" "$tmp4" "$has_fourth" "$has_fourth"
   fi
+
+  show_cursor
 }
 
 run_provider_with_loading() {
@@ -301,6 +414,7 @@ run_provider_with_loading() {
   pid=$!
 
   cleanup() {
+    show_cursor
     rm -f "$tmp"
     kill "$pid" 2>/dev/null
   }
@@ -314,43 +428,92 @@ run_provider_with_loading() {
 }
 
 run_all_parallel() {
-  local has_claude=0 has_codex=0
+  local has_claude=0 has_codex=0 has_gemini=0 has_jetbrains=0
   if provider_available claude; then has_claude=1; fi
   if provider_available codex; then has_codex=1; fi
+  if provider_available gemini; then has_gemini=1; fi
+  if provider_available jetbrains; then has_jetbrains=1; fi
 
-  if ((has_claude && !has_codex)); then
-    run_provider_with_loading "Claude" fetch_claude
-    return
-  fi
-  if ((!has_claude && has_codex)); then
-    run_provider_with_loading "Codex" fetch_codex
-    return
-  fi
-  if ((!has_claude && !has_codex)); then
-    printf "No AI providers found (claude, codex).\n" >&2
+  local total=$((has_claude + has_codex + has_gemini + has_jetbrains))
+  if ((total == 0)); then
+    printf "No AI providers found (claude, codex, gemini, jetbrains).\n" >&2
     return 1
   fi
+  if ((has_claude && total == 1)); then run_provider_with_loading "Claude" fetch_claude; return; fi
+  if ((has_codex && total == 1)); then run_provider_with_loading "Codex" fetch_codex; return; fi
+  if ((has_gemini && total == 1)); then run_provider_with_loading "Gemini" fetch_gemini; return; fi
+  if ((has_jetbrains && total == 1)); then run_provider_with_loading "JetBrains" fetch_jetbrains; return; fi
 
-  local claude_tmp codex_tmp claude_pid codex_pid
-  claude_tmp=$(mktemp)
-  codex_tmp=$(mktemp)
+  local claude_tmp="" codex_tmp="" gemini_tmp="" jetbrains_tmp=""
+  local claude_pid="" codex_pid="" gemini_pid="" jetbrains_pid=""
 
-  fetch_claude >"$claude_tmp" &
-  claude_pid=$!
-
-  fetch_codex >"$codex_tmp" &
-  codex_pid=$!
+  if ((has_claude)); then
+    claude_tmp=$(mktemp)
+    fetch_claude >"$claude_tmp" &
+    claude_pid=$!
+  fi
+  if ((has_codex)); then
+    codex_tmp=$(mktemp)
+    fetch_codex >"$codex_tmp" &
+    codex_pid=$!
+  fi
+  if ((has_gemini)); then
+    gemini_tmp=$(mktemp)
+    fetch_gemini >"$gemini_tmp" &
+    gemini_pid=$!
+  fi
+  if ((has_jetbrains)); then
+    jetbrains_tmp=$(mktemp)
+    fetch_jetbrains >"$jetbrains_tmp" &
+    jetbrains_pid=$!
+  fi
 
   cleanup() {
-    rm -f "$claude_tmp" "$codex_tmp"
-    kill "$claude_pid" "$codex_pid" 2>/dev/null
+    show_cursor
+    [[ -n "$claude_tmp" ]] && rm -f "$claude_tmp"
+    [[ -n "$codex_tmp" ]] && rm -f "$codex_tmp"
+    [[ -n "$gemini_tmp" ]] && rm -f "$gemini_tmp"
+    [[ -n "$jetbrains_tmp" ]] && rm -f "$jetbrains_tmp"
+    [[ -n "$claude_pid" ]] && kill "$claude_pid" 2>/dev/null || true
+    [[ -n "$codex_pid" ]] && kill "$codex_pid" 2>/dev/null || true
+    [[ -n "$gemini_pid" ]] && kill "$gemini_pid" 2>/dev/null || true
+    [[ -n "$jetbrains_pid" ]] && kill "$jetbrains_pid" 2>/dev/null || true
   }
   trap 'cleanup; trap - INT;  kill -INT  $$' INT
   trap 'cleanup; trap - TERM; kill -TERM $$' TERM
   trap 'cleanup' EXIT
 
-  wait_and_render_fetches "Claude" "$claude_pid" "$claude_tmp" "Codex" "$codex_pid" "$codex_tmp"
-  rm -f "$claude_tmp" "$codex_tmp"
+  local labels=() pids=() tmps=()
+  if ((has_claude)); then
+    labels+=("Claude")
+    pids+=("$claude_pid")
+    tmps+=("$claude_tmp")
+  fi
+  if ((has_codex)); then
+    labels+=("Codex")
+    pids+=("$codex_pid")
+    tmps+=("$codex_tmp")
+  fi
+  if ((has_gemini)); then
+    labels+=("Gemini")
+    pids+=("$gemini_pid")
+    tmps+=("$gemini_tmp")
+  fi
+  if ((has_jetbrains)); then
+    labels+=("JetBrains")
+    pids+=("$jetbrains_pid")
+    tmps+=("$jetbrains_tmp")
+  fi
+
+  wait_and_render_fetches \
+    "${labels[0]}" "${pids[0]}" "${tmps[0]}" \
+    "${labels[1]:-}" "${pids[1]:-}" "${tmps[1]:-}" \
+    "${labels[2]:-}" "${pids[2]:-}" "${tmps[2]:-}" \
+    "${labels[3]:-}" "${pids[3]:-}" "${tmps[3]:-}"
+  [[ -n "$claude_tmp" ]] && rm -f "$claude_tmp"
+  [[ -n "$codex_tmp" ]] && rm -f "$codex_tmp"
+  [[ -n "$gemini_tmp" ]] && rm -f "$gemini_tmp"
+  [[ -n "$jetbrains_tmp" ]] && rm -f "$jetbrains_tmp"
   trap - EXIT INT TERM
 }
 
@@ -501,6 +664,272 @@ fetch_codex() {
   draw_reset "$secondary_reset_epoch"
 }
 
+# ── gemini ──────────────────────────────────────────────
+
+gemini_account_email() {
+  local accounts_file="${HOME}/.gemini/google_accounts.json"
+  [[ -f "$accounts_file" ]] || return 0
+  jq -r '.active // empty' "$accounts_file" 2>/dev/null || true
+}
+
+gemini_bucket_info() {
+  case "$1" in
+  gemini-2.5-flash)       printf '10\tFlash'  ;;
+  gemini-2.5-pro)         printf '20\tPro'    ;;
+  gemini-3-flash-preview) printf '30\tPreview' ;;
+  gemini-3-pro-preview)   printf '30\tPreview' ;;
+  gemini-2.5-flash-lite)  printf '50\tLite'   ;;
+  *)                      printf '99\t%s' "$1" ;;
+  esac
+}
+
+fetch_gemini() {
+  local creds_file="$HOME/.gemini/oauth_creds.json"
+  local access_token="" expiry_date=""
+
+  if [[ -f "$creds_file" ]]; then
+    local _creds
+    _creds=$(jq -r '[.access_token // "", .expiry_date // ""] | @tsv' "$creds_file" 2>/dev/null)
+    IFS=$'\t' read -r access_token expiry_date <<<"$_creds"
+  fi
+
+  if [[ -z "$access_token" ]]; then
+    draw_error "not logged in run: gemini"
+    return
+  fi
+
+  local now
+  now=$(date +%s)
+  if [[ -n "$expiry_date" && "$expiry_date" =~ ^[0-9]+$ ]]; then
+    if ((expiry_date / 1000 <= now + 60)); then
+      draw_error "session expired run: gemini"
+      return
+    fi
+  fi
+
+  local metadata project_hint load_resp project_id quota_resp
+  local _sf load_status quota_status
+  metadata='{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}'
+  project_hint="${GOOGLE_CLOUD_PROJECT:-${GOOGLE_CLOUD_PROJECT_ID:-}}"
+
+  _sf=$(mktemp)
+  if [[ -n "$project_hint" ]]; then
+    load_resp=$(HTTP_STATUS_FILE="$_sf" http_json \
+      -H "Authorization: Bearer $access_token" \
+      -H "Content-Type: application/json" \
+      -d "{\"cloudaicompanionProject\":\"$project_hint\",\"metadata\":$metadata}" \
+      "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist")
+  else
+    load_resp=$(HTTP_STATUS_FILE="$_sf" http_json \
+      -H "Authorization: Bearer $access_token" \
+      -H "Content-Type: application/json" \
+      -d "{\"metadata\":$metadata}" \
+      "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist")
+  fi
+  load_status=$(cat "$_sf" 2>/dev/null || echo "000")
+  rm -f "$_sf"
+
+  if [[ "$load_status" != 2* ]] || [[ -z "$load_resp" ]]; then
+    case "$load_status" in
+    401 | 403) draw_error "session expired run: gemini" ;;
+    000) draw_error "network error or request timed out" ;;
+    *) draw_error "request failed (HTTP $load_status)" ;;
+    esac
+    return
+  fi
+
+  project_id=$(printf '%s' "$load_resp" | jq -r '.cloudaicompanionProject // empty' 2>/dev/null)
+  [[ -z "$project_id" && -n "$project_hint" ]] && project_id="$project_hint"
+
+  if [[ -z "$project_id" ]]; then
+    local validation_url
+    validation_url=$(printf '%s' "$load_resp" | jq -r '.ineligibleTiers[]?.validationUrl // empty' 2>/dev/null | head -n1)
+    if [[ -n "$validation_url" ]]; then
+      draw_error "validation required see: $validation_url"
+    else
+      draw_error "Gemini project/quota is unavailable"
+    fi
+    return
+  fi
+
+  _sf=$(mktemp)
+  quota_resp=$(HTTP_STATUS_FILE="$_sf" http_json \
+    -H "Authorization: Bearer $access_token" \
+    -H "Content-Type: application/json" \
+    -d "{\"project\":\"$project_id\"}" \
+    "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota")
+  quota_status=$(cat "$_sf" 2>/dev/null || echo "000")
+  rm -f "$_sf"
+
+  if [[ "$quota_status" != 2* ]] || [[ -z "$quota_resp" ]]; then
+    case "$quota_status" in
+    401 | 403) draw_error "session expired run: gemini" ;;
+    000) draw_error "network error or request timed out" ;;
+    *) draw_error "request failed (HTTP $quota_status)" ;;
+    esac
+    return
+  fi
+
+  local bucket_rows=()
+  while IFS=$'\t' read -r model_id percent reset_time; do
+    [[ -z "$model_id" ]] && continue
+    local _info _order _label
+    IFS=$'\t' read -r _order _label <<<"$(gemini_bucket_info "$model_id")"
+    bucket_rows+=("$_order"$'\t'"$_label"$'\t'"$percent"$'\t'"$reset_time")
+  done < <(
+    printf '%s' "$quota_resp" | jq -r '.buckets[]? | [.modelId // "", (((1 - (.remainingFraction // 1)) * 100) | round | tostring), .resetTime // ""] | @tsv' 2>/dev/null
+  )
+
+  if (( ${#bucket_rows[@]} == 0 )); then
+    draw_error "Gemini quota data is unavailable"
+    return
+  fi
+
+  local summary_percent=-1 summary_reset_epoch="" detail_line=""
+  local grouped_rows
+  grouped_rows=$(printf '%s\n' "${bucket_rows[@]}" | sort -t $'\t' -k1,1n | awk -F '\t' '
+    {
+      label=$2
+      percent=$3 + 0
+      reset=$4
+      if (!(label in max) || percent > max[label]) {
+        max[label]=percent
+      }
+      if (!(label in latest) || reset > latest[label]) {
+        latest[label]=reset
+      }
+      if (!(label in ord)) {
+        ord[label]=$1 + 0
+        labels[++count]=label
+      }
+    }
+    END {
+      for (i=1; i<=count; i++) {
+        label=labels[i]
+        printf "%d\t%s\t%d\t%s\n", ord[label], label, max[label], latest[label]
+      }
+    }')
+
+  local order label percent reset_time reset_epoch
+  while IFS=$'\t' read -r order label percent reset_time; do
+    [[ -n "$order" ]] || continue
+
+    if (( summary_percent < 0 || percent > summary_percent )); then
+      summary_percent=$percent
+    fi
+
+    reset_epoch=$(normalize_epoch "$reset_time")
+    if [[ -n "$reset_epoch" ]] && (( reset_epoch > ${summary_reset_epoch:-0} )); then
+      summary_reset_epoch="$reset_epoch"
+    fi
+
+    if [[ -n "$detail_line" ]]; then
+      detail_line+="  "
+    fi
+    detail_line+="$label ${percent}%"
+  done <<<"$grouped_rows"
+
+  if (( summary_percent >= 0 )); then
+    draw_bar "Daily" "$summary_percent"
+  else
+    draw_unavailable "Daily"
+  fi
+  draw_reset "$summary_reset_epoch"
+
+  if [[ -n "$detail_line" ]]; then
+    printf "  %-8s ${DIM}detail: %s${RESET}\n" "" "$detail_line"
+  fi
+
+}
+
+# ── jetbrains ───────────────────────────────────────────
+
+fetch_jetbrains() {
+  local quota_file quota_info next_refill
+  quota_file=$(find_jetbrains_quota_file)
+
+  # JetBrains reads from a local file and can complete before the spinner paints.
+  # Keep a brief delay so its loading state is visible like the network-backed providers.
+  sleep 0.25
+
+  if [[ -z "$quota_file" || ! -f "$quota_file" ]]; then
+    draw_error "no JetBrains AI quota file found"
+    return
+  fi
+
+  local raw_quota_info raw_next_refill quota_row
+  quota_row=$(
+    awk '
+      /name="quotaInfo"/ && match($0, /value="[^"]*"/) {
+        qi = substr($0, RSTART + 7, RLENGTH - 8)
+      }
+      /name="nextRefill"/ && match($0, /value="[^"]*"/) {
+        nr = substr($0, RSTART + 7, RLENGTH - 8)
+      }
+      END { printf "%s\t%s\n", qi, nr }
+    ' "$quota_file"
+  )
+  IFS=$'\t' read -r raw_quota_info raw_next_refill <<<"$quota_row"
+  quota_info=$(xml_unescape "$raw_quota_info")
+  next_refill=$(xml_unescape "$raw_next_refill")
+
+  if [[ -z "$quota_info" ]]; then
+    draw_error "JetBrains quota info is unavailable"
+    return
+  fi
+
+  local quota_type current maximum until tariff_current tariff_max topup_current topup_max duration quota_values
+  quota_values=$(
+    {
+      printf '%s' "$quota_info" | jq -r '[
+        (.type // ""),
+        (.current // ""),
+        (.maximum // ""),
+        (.until // ""),
+        (.tariffQuota.current // ""),
+        (.tariffQuota.maximum // ""),
+        (.topUpQuota.current // ""),
+        (.topUpQuota.maximum // "")
+      ] | @tsv' 2>/dev/null
+      printf '\t'
+      printf '%s' "$next_refill" | jq -r '.tariff.duration // ""' 2>/dev/null
+      printf '\n'
+    }
+  )
+  IFS=$'\t' read -r quota_type current maximum until tariff_current tariff_max topup_current topup_max duration <<<"$quota_values"
+
+  if [[ -z "$maximum" || "$maximum" == "0" || "$maximum" == "null" ]]; then
+    draw_error "JetBrains quota limit is unavailable"
+    return
+  fi
+
+  local percent reset_epoch label
+  percent=$(awk "BEGIN{printf \"%.0f\", ($current / $maximum) * 100}" 2>/dev/null || true)
+  reset_epoch=$(normalize_epoch "$until")
+  label=$(duration_to_label "$duration")
+
+  if [[ -n "$percent" ]]; then
+    draw_bar "$label" "$percent"
+  else
+    draw_unavailable "$label"
+  fi
+  draw_reset "$reset_epoch"
+
+  printf "  %-8s ${DIM}%s / %s credits${RESET}\n" "" "${current%.*}" "${maximum%.*}"
+
+  if [[ -n "$topup_max" && "$topup_max" != "0" && "$topup_max" != "null" ]]; then
+    local topup_percent
+    topup_percent=$(awk "BEGIN{printf \"%.0f\", ($topup_current / $topup_max) * 100}" 2>/dev/null || true)
+    printf "\n"
+    if [[ -n "$topup_percent" ]]; then
+      draw_bar "Top-up" "$topup_percent"
+    else
+      draw_unavailable "Top-up"
+    fi
+    printf "  %-8s ${DIM}%s / %s credits${RESET}\n" "" "${topup_current%.*}" "${topup_max%.*}"
+  fi
+}
+
 # ── main ────────────────────────────────────────────────
 
 usage() {
@@ -510,8 +939,10 @@ Usage: aiusage [provider]
 Providers:
   claude   Show only Claude usage
   codex    Show only Codex usage
+  gemini   Show only Gemini CLI usage
+  jetbrains Show only JetBrains AI usage
 
-Omit provider to print both.
+Omit provider to print all detected providers.
 EOF
 }
 
@@ -534,6 +965,20 @@ codex)
     exit 1
   fi
   run_provider_with_loading "Codex" fetch_codex
+  ;;
+gemini)
+  if ! provider_available gemini; then
+    printf "gemini is not installed\n" >&2
+    exit 1
+  fi
+  run_provider_with_loading "Gemini" fetch_gemini
+  ;;
+jetbrains)
+  if ! provider_available jetbrains; then
+    printf "jetbrains usage data is unavailable\n" >&2
+    exit 1
+  fi
+  run_provider_with_loading "JetBrains" fetch_jetbrains
   ;;
 -h | --help | help)
   usage
