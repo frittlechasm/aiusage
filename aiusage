@@ -87,6 +87,7 @@ provider_available() {
   case "$1" in
   claude) command -v claude >/dev/null 2>&1 ;;
   codex) command -v codex >/dev/null 2>&1 ;;
+  cursor) [[ -n "${CURSOR_COOKIE:-}" ]] ;;
   gemini) command -v gemini >/dev/null 2>&1 ;;
   jetbrains) [[ -n "$(find_jetbrains_quota_file)" ]] ;;
   *) return 1 ;;
@@ -317,6 +318,7 @@ render_fetch_state() {
   local label2="$5" tmp2="$6" done2="$7" has_second="$8"
   local label3="${9:-}" tmp3="${10:-}" done3="${11:-0}" has_third="${12:-0}"
   local label4="${13:-}" tmp4="${14:-}" done4="${15:-0}" has_fourth="${16:-0}"
+  local label5="${17:-}" tmp5="${18:-}" done5="${19:-0}" has_fifth="${20:-0}"
   local lines=0
 
   render_provider_section "$label1" "$tmp1" "$done1" "$frame"
@@ -343,6 +345,13 @@ render_fetch_state() {
     lines=$((lines + SECTION_LINES))
   fi
 
+  if ((has_fifth)); then
+    render_line ""
+    ((lines++))
+    render_provider_section "$label5" "$tmp5" "$done5" "$frame"
+    lines=$((lines + SECTION_LINES))
+  fi
+
   RENDERED_LINES="$lines"
 }
 
@@ -351,12 +360,14 @@ wait_and_render_fetches() {
   local label2="${4:-}" pid2="${5:-}" tmp2="${6:-}"
   local label3="${7:-}" pid3="${8:-}" tmp3="${9:-}"
   local label4="${10:-}" pid4="${11:-}" tmp4="${12:-}"
-  local has_second=0 has_third=0 has_fourth=0 frame=0 prev_lines=0
-  local done1 done2 done3 done4
+  local label5="${13:-}" pid5="${14:-}" tmp5="${15:-}"
+  local has_second=0 has_third=0 has_fourth=0 has_fifth=0 frame=0 prev_lines=0
+  local done1 done2 done3 done4 done5
 
   [[ -n "$pid2" ]] && has_second=1
   [[ -n "$pid3" ]] && has_third=1
   [[ -n "$pid4" ]] && has_fourth=1
+  [[ -n "$pid5" ]] && has_fifth=1
 
   hide_cursor
   while true; do
@@ -364,6 +375,7 @@ wait_and_render_fetches() {
     done2=0
     done3=0
     done4=0
+    done5=0
 
     kill -0 "$pid1" 2>/dev/null || done1=1
     if ((has_second)); then
@@ -375,17 +387,20 @@ wait_and_render_fetches() {
     if ((has_fourth)); then
       kill -0 "$pid4" 2>/dev/null || done4=1
     fi
+    if ((has_fifth)); then
+      kill -0 "$pid5" 2>/dev/null || done5=1
+    fi
 
     if [[ -t 1 ]]; then
       move_to_render_start "$prev_lines"
-      render_fetch_state "$frame" "$label1" "$tmp1" "$done1" "$label2" "$tmp2" "$done2" "$has_second" "$label3" "$tmp3" "$done3" "$has_third" "$label4" "$tmp4" "$done4" "$has_fourth"
+      render_fetch_state "$frame" "$label1" "$tmp1" "$done1" "$label2" "$tmp2" "$done2" "$has_second" "$label3" "$tmp3" "$done3" "$has_third" "$label4" "$tmp4" "$done4" "$has_fourth" "$label5" "$tmp5" "$done5" "$has_fifth"
       clear_extra_render_lines $((prev_lines - RENDERED_LINES))
       if ((RENDERED_LINES > prev_lines)); then
         prev_lines="$RENDERED_LINES"
       fi
     fi
 
-    if ((done1)) && ((!has_second || done2)) && ((!has_third || done3)) && ((!has_fourth || done4)); then
+    if ((done1)) && ((!has_second || done2)) && ((!has_third || done3)) && ((!has_fourth || done4)) && ((!has_fifth || done5)); then
       break
     fi
 
@@ -397,9 +412,10 @@ wait_and_render_fetches() {
   ((has_second)) && { wait "$pid2" || true; }
   ((has_third)) && { wait "$pid3" || true; }
   ((has_fourth)) && { wait "$pid4" || true; }
+  ((has_fifth)) && { wait "$pid5" || true; }
 
   if [[ ! -t 1 ]]; then
-    render_fetch_state "$frame" "$label1" "$tmp1" 1 "$label2" "$tmp2" "$has_second" "$has_second" "$label3" "$tmp3" "$has_third" "$has_third" "$label4" "$tmp4" "$has_fourth" "$has_fourth"
+    render_fetch_state "$frame" "$label1" "$tmp1" 1 "$label2" "$tmp2" "$has_second" "$has_second" "$label3" "$tmp3" "$has_third" "$has_third" "$label4" "$tmp4" "$has_fourth" "$has_fourth" "$label5" "$tmp5" "$has_fifth" "$has_fifth"
   fi
 
   show_cursor
@@ -428,24 +444,26 @@ run_provider_with_loading() {
 }
 
 run_all_parallel() {
-  local has_claude=0 has_codex=0 has_gemini=0 has_jetbrains=0
+  local has_claude=0 has_codex=0 has_cursor=0 has_gemini=0 has_jetbrains=0
   if provider_available claude; then has_claude=1; fi
   if provider_available codex; then has_codex=1; fi
+  if provider_available cursor; then has_cursor=1; fi
   if provider_available gemini; then has_gemini=1; fi
   if provider_available jetbrains; then has_jetbrains=1; fi
 
-  local total=$((has_claude + has_codex + has_gemini + has_jetbrains))
+  local total=$((has_claude + has_codex + has_cursor + has_gemini + has_jetbrains))
   if ((total == 0)); then
-    printf "No AI providers found (claude, codex, gemini, jetbrains).\n" >&2
+    printf "No AI providers found (claude, codex, cursor, gemini, jetbrains).\n" >&2
     return 1
   fi
   if ((has_claude && total == 1)); then run_provider_with_loading "Claude" fetch_claude; return; fi
   if ((has_codex && total == 1)); then run_provider_with_loading "Codex" fetch_codex; return; fi
+  if ((has_cursor && total == 1)); then run_provider_with_loading "Cursor" fetch_cursor; return; fi
   if ((has_gemini && total == 1)); then run_provider_with_loading "Gemini" fetch_gemini; return; fi
   if ((has_jetbrains && total == 1)); then run_provider_with_loading "JetBrains" fetch_jetbrains; return; fi
 
-  local claude_tmp="" codex_tmp="" gemini_tmp="" jetbrains_tmp=""
-  local claude_pid="" codex_pid="" gemini_pid="" jetbrains_pid=""
+  local claude_tmp="" codex_tmp="" cursor_tmp="" gemini_tmp="" jetbrains_tmp=""
+  local claude_pid="" codex_pid="" cursor_pid="" gemini_pid="" jetbrains_pid=""
 
   if ((has_claude)); then
     claude_tmp=$(mktemp)
@@ -456,6 +474,11 @@ run_all_parallel() {
     codex_tmp=$(mktemp)
     fetch_codex >"$codex_tmp" &
     codex_pid=$!
+  fi
+  if ((has_cursor)); then
+    cursor_tmp=$(mktemp)
+    fetch_cursor >"$cursor_tmp" &
+    cursor_pid=$!
   fi
   if ((has_gemini)); then
     gemini_tmp=$(mktemp)
@@ -472,10 +495,12 @@ run_all_parallel() {
     show_cursor
     [[ -n "$claude_tmp" ]] && rm -f "$claude_tmp"
     [[ -n "$codex_tmp" ]] && rm -f "$codex_tmp"
+    [[ -n "$cursor_tmp" ]] && rm -f "$cursor_tmp"
     [[ -n "$gemini_tmp" ]] && rm -f "$gemini_tmp"
     [[ -n "$jetbrains_tmp" ]] && rm -f "$jetbrains_tmp"
     [[ -n "$claude_pid" ]] && kill "$claude_pid" 2>/dev/null || true
     [[ -n "$codex_pid" ]] && kill "$codex_pid" 2>/dev/null || true
+    [[ -n "$cursor_pid" ]] && kill "$cursor_pid" 2>/dev/null || true
     [[ -n "$gemini_pid" ]] && kill "$gemini_pid" 2>/dev/null || true
     [[ -n "$jetbrains_pid" ]] && kill "$jetbrains_pid" 2>/dev/null || true
   }
@@ -494,6 +519,11 @@ run_all_parallel() {
     pids+=("$codex_pid")
     tmps+=("$codex_tmp")
   fi
+  if ((has_cursor)); then
+    labels+=("Cursor")
+    pids+=("$cursor_pid")
+    tmps+=("$cursor_tmp")
+  fi
   if ((has_gemini)); then
     labels+=("Gemini")
     pids+=("$gemini_pid")
@@ -509,9 +539,11 @@ run_all_parallel() {
     "${labels[0]}" "${pids[0]}" "${tmps[0]}" \
     "${labels[1]:-}" "${pids[1]:-}" "${tmps[1]:-}" \
     "${labels[2]:-}" "${pids[2]:-}" "${tmps[2]:-}" \
-    "${labels[3]:-}" "${pids[3]:-}" "${tmps[3]:-}"
+    "${labels[3]:-}" "${pids[3]:-}" "${tmps[3]:-}" \
+    "${labels[4]:-}" "${pids[4]:-}" "${tmps[4]:-}"
   [[ -n "$claude_tmp" ]] && rm -f "$claude_tmp"
   [[ -n "$codex_tmp" ]] && rm -f "$codex_tmp"
+  [[ -n "$cursor_tmp" ]] && rm -f "$cursor_tmp"
   [[ -n "$gemini_tmp" ]] && rm -f "$gemini_tmp"
   [[ -n "$jetbrains_tmp" ]] && rm -f "$jetbrains_tmp"
   trap - EXIT INT TERM
@@ -662,6 +694,118 @@ fetch_codex() {
     draw_unavailable "Weekly"
   fi
   draw_reset "$secondary_reset_epoch"
+}
+
+# ── cursor ──────────────────────────────────────────────
+
+fetch_cursor() {
+  local cookie="${CURSOR_COOKIE:-}"
+  if [[ -z "$cookie" ]]; then
+    draw_error "set CURSOR_COOKIE env var (WorkosCursorSessionToken from browser DevTools)"
+    return
+  fi
+
+  local cookie_hdr="Cookie: WorkosCursorSessionToken=$cookie"
+  local _sf
+
+  # Step 1: try modern usage-summary endpoint (current plans — credits-based)
+  local sum_resp sum_status
+  _sf=$(mktemp)
+  sum_resp=$(HTTP_STATUS_FILE="$_sf" http_json \
+    -H "$cookie_hdr" \
+    -H "Accept: application/json" \
+    "https://cursor.com/api/usage-summary")
+  sum_status=$(cat "$_sf" 2>/dev/null || echo "000")
+  rm -f "$_sf"
+
+  if [[ "$sum_status" == 2* ]] && [[ -n "$sum_resp" ]]; then
+    local plan_percent billing_end od_used od_limit
+    IFS=$'\t' read -r plan_percent billing_end od_used od_limit < <(
+      printf '%s' "$sum_resp" | jq -r '[
+        (.individualUsage.plan.totalPercentUsed // ""),
+        (.billingCycleEnd // ""),
+        (.individualUsage.onDemand.used // ""),
+        (.individualUsage.onDemand.limit // "")
+      ] | @tsv' 2>/dev/null
+    )
+
+    if [[ -n "$plan_percent" && "$plan_percent" != "null" ]]; then
+      local reset_epoch
+      reset_epoch=$(normalize_epoch "$billing_end")
+      draw_bar "Monthly" "${plan_percent%.*}"
+      draw_reset "$reset_epoch"
+
+      if [[ -n "$od_limit" && "$od_limit" != "0" && "$od_limit" != "null" ]]; then
+        local od_percent
+        od_percent=$(awk "BEGIN{printf \"%.0f\", (${od_used:-0} / $od_limit) * 100}" 2>/dev/null || echo 0)
+        printf "\n"
+        draw_bar "On-demand" "$od_percent"
+        draw_credits_line "${od_used:-0}" "$od_limit"
+      fi
+      return
+    fi
+  fi
+
+  # Step 2: fall back to legacy request-count endpoint — requires user ID
+  local me_resp me_status user_id
+  _sf=$(mktemp)
+  me_resp=$(HTTP_STATUS_FILE="$_sf" http_json \
+    -H "$cookie_hdr" \
+    -H "Accept: application/json" \
+    "https://cursor.com/api/auth/me")
+  me_status=$(cat "$_sf" 2>/dev/null || echo "000")
+  rm -f "$_sf"
+
+  if [[ "$me_status" != 2* ]] || [[ -z "$me_resp" ]]; then
+    case "$me_status" in
+    401 | 403) draw_error "session expired — update CURSOR_COOKIE from browser" ;;
+    000)       draw_error "network error or request timed out" ;;
+    *)         draw_error "request failed (HTTP $me_status)" ;;
+    esac
+    return
+  fi
+
+  user_id=$(printf '%s' "$me_resp" | jq -r '.sub // empty' 2>/dev/null)
+  if [[ -z "$user_id" ]]; then
+    draw_error "could not retrieve usage data"
+    return
+  fi
+
+  local usage_resp usage_status
+  _sf=$(mktemp)
+  usage_resp=$(HTTP_STATUS_FILE="$_sf" http_json \
+    -H "$cookie_hdr" \
+    -H "Accept: application/json" \
+    "https://cursor.com/api/usage?user=$user_id")
+  usage_status=$(cat "$_sf" 2>/dev/null || echo "000")
+  rm -f "$_sf"
+
+  if [[ "$usage_status" != 2* ]] || [[ -z "$usage_resp" ]]; then
+    case "$usage_status" in
+    401 | 403) draw_error "session expired — update CURSOR_COOKIE from browser" ;;
+    000)       draw_error "network error or request timed out" ;;
+    *)         draw_error "request failed (HTTP $usage_status)" ;;
+    esac
+    return
+  fi
+
+  local used limit
+  IFS=$'\t' read -r used limit < <(
+    printf '%s' "$usage_resp" | jq -r '[
+      (.["gpt-4"].numRequests // ""),
+      (.["gpt-4"].maxRequestUsage // "")
+    ] | @tsv' 2>/dev/null
+  )
+
+  if [[ -z "$limit" || "$limit" == "0" || "$limit" == "null" ]]; then
+    draw_error "no premium request quota found"
+    return
+  fi
+
+  local percent
+  percent=$(awk "BEGIN{printf \"%.0f\", (${used:-0} / $limit) * 100}" 2>/dev/null || echo 0)
+  draw_bar "Monthly" "$percent"
+  printf "  %-8s ${DIM}%s / %s requests${RESET}\n" "" "${used:-0}" "$limit"
 }
 
 # ── gemini ──────────────────────────────────────────────
@@ -937,9 +1081,10 @@ usage() {
 Usage: aiusage [provider]
 
 Providers:
-  claude   Show only Claude usage
-  codex    Show only Codex usage
-  gemini   Show only Gemini CLI usage
+  claude    Show only Claude usage
+  codex     Show only Codex usage
+  cursor    Show only Cursor usage (requires CURSOR_COOKIE env var)
+  gemini    Show only Gemini CLI usage
   jetbrains Show only JetBrains AI usage
 
 Omit provider to print all detected providers.
@@ -965,6 +1110,13 @@ codex)
     exit 1
   fi
   run_provider_with_loading "Codex" fetch_codex
+  ;;
+cursor)
+  if ! provider_available cursor; then
+    printf "CURSOR_COOKIE is not set — copy WorkosCursorSessionToken from browser DevTools\n" >&2
+    exit 1
+  fi
+  run_provider_with_loading "Cursor" fetch_cursor
   ;;
 gemini)
   if ! provider_available gemini; then
