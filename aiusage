@@ -87,7 +87,7 @@ provider_available() {
   case "$1" in
   claude) command -v claude >/dev/null 2>&1 ;;
   codex) command -v codex >/dev/null 2>&1 ;;
-  cursor) [[ -n "${CURSOR_COOKIE:-}" ]] ;;
+  cursor) [[ -n "${CURSOR_COOKIE:-}" ]] || _cursor_has_browser ;;
   gemini) command -v gemini >/dev/null 2>&1 ;;
   jetbrains) [[ -n "$(find_jetbrains_quota_file)" ]] ;;
   *) return 1 ;;
@@ -698,10 +698,167 @@ fetch_codex() {
 
 # ── cursor ──────────────────────────────────────────────
 
+# Fast check: is any supported browser with sqlite3 present?
+_cursor_has_browser() {
+  command -v sqlite3 >/dev/null 2>&1 || return 1
+  if [[ "$OSTYPE" == darwin* ]]; then
+    [[ -d "$HOME/Library/Application Support/Firefox/Profiles" ]] ||
+      [[ -d "$HOME/Library/Application Support/Google/Chrome" ]] ||
+      [[ -d "$HOME/Library/Application Support/Chromium" ]] ||
+      [[ -d "$HOME/Library/Application Support/Arc" ]] ||
+      [[ -d "$HOME/Library/Application Support/BraveSoftware" ]] ||
+      [[ -d "$HOME/Library/Application Support/Microsoft Edge" ]] ||
+      [[ -d "$HOME/Library/Application Support/net.imput.helium" ]]
+  else
+    [[ -d "$HOME/.mozilla/firefox" ]] ||
+      [[ -d "$HOME/.config/google-chrome" ]] ||
+      [[ -d "$HOME/.config/chromium" ]] ||
+      [[ -d "$HOME/.config/brave-browser" ]] ||
+      [[ -d "$HOME/.config/net.imput.helium" ]]
+  fi
+}
+
+# Extract WorkosCursorSessionToken from Firefox cookies.sqlite (unencrypted)
+_cursor_cookie_firefox() {
+  command -v sqlite3 >/dev/null 2>&1 || return 1
+  local profiles_dir
+  if [[ "$OSTYPE" == darwin* ]]; then
+    profiles_dir="$HOME/Library/Application Support/Firefox/Profiles"
+  else
+    profiles_dir="$HOME/.mozilla/firefox"
+  fi
+  [[ -d "$profiles_dir" ]] || return 1
+
+  local profile db tmp val
+  for profile in "$profiles_dir"/*/; do
+    db="$profile/cookies.sqlite"
+    [[ -f "$db" ]] || continue
+    tmp=$(mktemp)
+    cp "$db" "$tmp" 2>/dev/null || { rm -f "$tmp"; continue; }
+    val=$(sqlite3 "$tmp" \
+      "SELECT value FROM moz_cookies WHERE host LIKE '%cursor.com%' AND name='WorkosCursorSessionToken' LIMIT 1" 2>/dev/null)
+    rm -f "$tmp"
+    [[ -n "$val" ]] && printf '%s' "$val" && return 0
+  done
+  return 1
+}
+
+# Decrypt a single AES-128-CBC encrypted Chromium cookie value.
+# Args: <hex-encoded encrypted_value> <keychain-service|"v10"> <uname>
+_chromium_decrypt_cookie() {
+  python3 - "$1" "$2" "$3" <<'PYEOF'
+import sys, hashlib, subprocess
+
+enc_hex, key_arg, os_name = sys.argv[1], sys.argv[2], sys.argv[3]
+enc = bytes.fromhex(enc_hex)
+
+if enc[:3] not in (b'v10', b'v11'):
+    try: print(enc.decode('utf-8').strip('\x00'), end='')
+    except: pass
+    sys.exit(0)
+
+version, ciphertext = enc[:3], enc[3:]
+
+if os_name == 'Darwin':
+    try:
+        password = subprocess.check_output(
+            ['security', 'find-generic-password', '-s', key_arg, '-w'],
+            stderr=subprocess.DEVNULL).strip()
+    except Exception:
+        sys.exit(1)
+    key = hashlib.pbkdf2_hmac('sha1', password, b'saltysalt', 1003, dklen=16)
+else:
+    if version == b'v11':
+        sys.exit(1)  # requires secret-service; skip
+    key = hashlib.pbkdf2_hmac('sha1', b'peanuts', b'saltysalt', 1, dklen=16)
+
+iv = b' ' * 16
+result = subprocess.run(
+    ['openssl', 'enc', '-aes-128-cbc', '-d', '-nosalt',
+     '-K', key.hex(), '-iv', iv.hex()],
+    input=ciphertext, capture_output=True)
+if result.returncode != 0:
+    sys.exit(1)
+# openssl -d already removes PKCS7 padding.
+# Some Chromium builds (e.g. ungoogled-chromium / Helium) prepend 32 random
+# bytes to the plaintext before encryption; try offset 0 first, then 32.
+for offset in (0, 32):
+    try:
+        val = result.stdout[offset:].decode('utf-8')
+        if val:
+            print(val, end='')
+            break
+    except (UnicodeDecodeError, ValueError):
+        continue
+PYEOF
+}
+
+# Extract WorkosCursorSessionToken from Chromium-based browser cookies (encrypted)
+_cursor_cookie_chromium() {
+  command -v sqlite3 >/dev/null 2>&1 || return 1
+  command -v python3 >/dev/null 2>&1 || return 1
+
+  local os
+  [[ "$OSTYPE" == darwin* ]] && os="Darwin" || os="Linux"
+
+  # Entries: "path:keychain-service"  (Linux uses "v10" as sentinel for peanuts key)
+  local -a entries
+  if [[ "$os" == "Darwin" ]]; then
+    entries=(
+      "$HOME/Library/Application Support/Google/Chrome:Chrome Safe Storage"
+      "$HOME/Library/Application Support/Chromium:Chromium Safe Storage"
+      "$HOME/Library/Application Support/Arc/User Data:Arc Safe Storage"
+      "$HOME/Library/Application Support/BraveSoftware/Brave-Browser:Brave Safe Storage"
+      "$HOME/Library/Application Support/Microsoft Edge:Microsoft Edge Safe Storage"
+      "$HOME/Library/Application Support/net.imput.helium:Helium Storage Key"
+    )
+  else
+    entries=(
+      "$HOME/.config/google-chrome:v10"
+      "$HOME/.config/chromium:v10"
+      "$HOME/.config/brave-browser:v10"
+      "$HOME/.config/net.imput.helium:v10"
+    )
+  fi
+
+  local entry dir key profile_dir db tmp enc val
+  for entry in "${entries[@]}"; do
+    dir="${entry%%:*}"
+    key="${entry#*:}"
+    [[ -d "$dir" ]] || continue
+
+    for profile_dir in "$dir"/*/; do
+      db="$profile_dir/Cookies"
+      [[ -f "$db" ]] || continue
+      tmp=$(mktemp)
+      cp "$db" "$tmp" 2>/dev/null || { rm -f "$tmp"; continue; }
+      enc=$(sqlite3 "$tmp" \
+        "SELECT hex(encrypted_value) FROM cookies WHERE host_key LIKE '%cursor.com%' AND name='WorkosCursorSessionToken' LIMIT 1" 2>/dev/null)
+      rm -f "$tmp"
+      [[ -n "$enc" ]] || continue
+
+      val=$(_chromium_decrypt_cookie "$enc" "$key" "$os" 2>/dev/null) || true
+      [[ -n "$val" ]] && printf '%s' "$val" && return 0
+    done
+  done
+  return 1
+}
+
+# Try all browsers; print the cookie value and return 0 on success.
+get_cursor_cookie_from_browser() {
+  local val
+  val=$(_cursor_cookie_firefox 2>/dev/null) && [[ -n "$val" ]] && printf '%s' "$val" && return 0
+  val=$(_cursor_cookie_chromium 2>/dev/null) && [[ -n "$val" ]] && printf '%s' "$val" && return 0
+  return 1
+}
+
 fetch_cursor() {
   local cookie="${CURSOR_COOKIE:-}"
   if [[ -z "$cookie" ]]; then
-    draw_error "set CURSOR_COOKIE env var (WorkosCursorSessionToken from browser DevTools)"
+    cookie=$(get_cursor_cookie_from_browser) || true
+  fi
+  if [[ -z "$cookie" ]]; then
+    draw_error "no Cursor session found — set CURSOR_COOKIE or log in via a browser"
     return
   fi
 
@@ -758,7 +915,7 @@ fetch_cursor() {
 
   if [[ "$me_status" != 2* ]] || [[ -z "$me_resp" ]]; then
     case "$me_status" in
-    401 | 403) draw_error "session expired — update CURSOR_COOKIE from browser" ;;
+    401 | 403) draw_error "session expired — re-login at cursor.com or update CURSOR_COOKIE" ;;
     000)       draw_error "network error or request timed out" ;;
     *)         draw_error "request failed (HTTP $me_status)" ;;
     esac
@@ -782,7 +939,7 @@ fetch_cursor() {
 
   if [[ "$usage_status" != 2* ]] || [[ -z "$usage_resp" ]]; then
     case "$usage_status" in
-    401 | 403) draw_error "session expired — update CURSOR_COOKIE from browser" ;;
+    401 | 403) draw_error "session expired — re-login at cursor.com or update CURSOR_COOKIE" ;;
     000)       draw_error "network error or request timed out" ;;
     *)         draw_error "request failed (HTTP $usage_status)" ;;
     esac
@@ -1083,7 +1240,7 @@ Usage: aiusage [provider]
 Providers:
   claude    Show only Claude usage
   codex     Show only Codex usage
-  cursor    Show only Cursor usage (requires CURSOR_COOKIE env var)
+  cursor    Show only Cursor usage (auto-detects from browser or CURSOR_COOKIE)
   gemini    Show only Gemini CLI usage
   jetbrains Show only JetBrains AI usage
 
@@ -1113,7 +1270,7 @@ codex)
   ;;
 cursor)
   if ! provider_available cursor; then
-    printf "CURSOR_COOKIE is not set — copy WorkosCursorSessionToken from browser DevTools\n" >&2
+    printf "Cursor not available — set CURSOR_COOKIE or ensure a supported browser (Firefox/Chrome/Arc/Brave/Edge) with sqlite3 is present\n" >&2
     exit 1
   fi
   run_provider_with_loading "Cursor" fetch_cursor
