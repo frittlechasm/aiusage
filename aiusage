@@ -743,105 +743,117 @@ _cursor_cookie_firefox() {
   return 1
 }
 
-# Decrypt a single AES-128-CBC encrypted Chromium cookie value.
-# Args: <hex-encoded encrypted_value> <keychain-service|"v10"> <uname>
-_chromium_decrypt_cookie() {
-  python3 - "$1" "$2" "$3" <<'PYEOF'
-import sys, hashlib, subprocess
-
-enc_hex, key_arg, os_name = sys.argv[1], sys.argv[2], sys.argv[3]
-enc = bytes.fromhex(enc_hex)
-
-if enc[:3] not in (b'v10', b'v11'):
-    try: print(enc.decode('utf-8').strip('\x00'), end='')
-    except: pass
-    sys.exit(0)
-
-version, ciphertext = enc[:3], enc[3:]
-
-if os_name == 'Darwin':
-    try:
-        password = subprocess.check_output(
-            ['security', 'find-generic-password', '-s', key_arg, '-w'],
-            stderr=subprocess.DEVNULL).strip()
-    except Exception:
-        sys.exit(1)
-    key = hashlib.pbkdf2_hmac('sha1', password, b'saltysalt', 1003, dklen=16)
-else:
-    if version == b'v11':
-        sys.exit(1)  # requires secret-service; skip
-    key = hashlib.pbkdf2_hmac('sha1', b'peanuts', b'saltysalt', 1, dklen=16)
-
-iv = b' ' * 16
-result = subprocess.run(
-    ['openssl', 'enc', '-aes-128-cbc', '-d', '-nosalt',
-     '-K', key.hex(), '-iv', iv.hex()],
-    input=ciphertext, capture_output=True)
-if result.returncode != 0:
-    sys.exit(1)
-# openssl -d already removes PKCS7 padding.
-# Some Chromium builds (e.g. ungoogled-chromium / Helium) prepend 32 random
-# bytes to the plaintext before encryption; try offset 0 first, then 32.
-for offset in (0, 32):
-    try:
-        val = result.stdout[offset:].decode('utf-8')
-        if val:
-            print(val, end='')
-            break
-    except (UnicodeDecodeError, ValueError):
-        continue
-PYEOF
-}
-
-# Extract WorkosCursorSessionToken from Chromium-based browser cookies (encrypted)
+# Extract WorkosCursorSessionToken from Chromium-based browser cookies (encrypted).
+# Runs as a single Python process so the macOS keychain is prompted at most once
+# per browser (keychain lookups are cached inside the script).
 _cursor_cookie_chromium() {
-  command -v sqlite3 >/dev/null 2>&1 || return 1
   command -v python3 >/dev/null 2>&1 || return 1
 
   local os
   [[ "$OSTYPE" == darwin* ]] && os="Darwin" || os="Linux"
 
-  # Entries: "path:keychain-service"  (Linux uses "v10" as sentinel for peanuts key)
-  local -a entries
-  if [[ "$os" == "Darwin" ]]; then
-    entries=(
-      "$HOME/Library/Application Support/Google/Chrome:Chrome Safe Storage"
-      "$HOME/Library/Application Support/Chromium:Chromium Safe Storage"
-      "$HOME/Library/Application Support/Arc/User Data:Arc Safe Storage"
-      "$HOME/Library/Application Support/BraveSoftware/Brave-Browser:Brave Safe Storage"
-      "$HOME/Library/Application Support/Microsoft Edge:Microsoft Edge Safe Storage"
-      "$HOME/Library/Application Support/net.imput.helium:Helium Storage Key"
-    )
-  else
-    entries=(
-      "$HOME/.config/google-chrome:v10"
-      "$HOME/.config/chromium:v10"
-      "$HOME/.config/brave-browser:v10"
-      "$HOME/.config/net.imput.helium:v10"
-    )
-  fi
+  python3 - "$os" "$HOME" <<'PYEOF'
+import sys, os, glob, hashlib, subprocess, sqlite3, shutil, tempfile
 
-  local entry dir key profile_dir db tmp enc val
-  for entry in "${entries[@]}"; do
-    dir="${entry%%:*}"
-    key="${entry#*:}"
-    [[ -d "$dir" ]] || continue
+os_name, home = sys.argv[1], sys.argv[2]
 
-    for profile_dir in "$dir"/*/; do
-      db="$profile_dir/Cookies"
-      [[ -f "$db" ]] || continue
-      tmp=$(mktemp)
-      cp "$db" "$tmp" 2>/dev/null || { rm -f "$tmp"; continue; }
-      enc=$(sqlite3 "$tmp" \
-        "SELECT hex(encrypted_value) FROM cookies WHERE host_key LIKE '%cursor.com%' AND name='WorkosCursorSessionToken' LIMIT 1" 2>/dev/null)
-      rm -f "$tmp"
-      [[ -n "$enc" ]] || continue
+if os_name == 'Darwin':
+    entries = [
+        (os.path.join(home, 'Library/Application Support/Google/Chrome'),              'Chrome Safe Storage'),
+        (os.path.join(home, 'Library/Application Support/Chromium'),                   'Chromium Safe Storage'),
+        (os.path.join(home, 'Library/Application Support/Arc/User Data'),              'Arc Safe Storage'),
+        (os.path.join(home, 'Library/Application Support/BraveSoftware/Brave-Browser'),'Brave Safe Storage'),
+        (os.path.join(home, 'Library/Application Support/Microsoft Edge'),             'Microsoft Edge Safe Storage'),
+        (os.path.join(home, 'Library/Application Support/net.imput.helium'),           'Helium Storage Key'),
+    ]
+else:
+    entries = [
+        (os.path.join(home, '.config/google-chrome'),   'v10'),
+        (os.path.join(home, '.config/chromium'),        'v10'),
+        (os.path.join(home, '.config/brave-browser'),   'v10'),
+        (os.path.join(home, '.config/net.imput.helium'),'v10'),
+    ]
 
-      val=$(_chromium_decrypt_cookie "$enc" "$key" "$os" 2>/dev/null) || true
-      [[ -n "$val" ]] && printf '%s' "$val" && return 0
-    done
-  done
-  return 1
+# Cache keychain lookups so macOS prompts at most once per browser.
+_keychain_cache = {}
+
+def get_keychain_password(service):
+    if service in _keychain_cache:
+        return _keychain_cache[service]
+    try:
+        pw = subprocess.check_output(
+            ['security', 'find-generic-password', '-s', service, '-w'],
+            stderr=subprocess.DEVNULL).strip()
+    except Exception:
+        pw = None
+    _keychain_cache[service] = pw
+    return pw
+
+def decrypt(enc_hex, key_service):
+    enc = bytes.fromhex(enc_hex)
+    if enc[:3] not in (b'v10', b'v11'):
+        try: return enc.decode('utf-8').strip('\x00') or None
+        except: return None
+    version, ciphertext = enc[:3], enc[3:]
+    if os_name == 'Darwin':
+        password = get_keychain_password(key_service)
+        if not password:
+            return None
+        key = hashlib.pbkdf2_hmac('sha1', password, b'saltysalt', 1003, dklen=16)
+    else:
+        if version == b'v11':
+            return None  # requires secret-service; skip
+        key = hashlib.pbkdf2_hmac('sha1', b'peanuts', b'saltysalt', 1, dklen=16)
+    iv = b' ' * 16
+    result = subprocess.run(
+        ['openssl', 'enc', '-aes-128-cbc', '-d', '-nosalt',
+         '-K', key.hex(), '-iv', iv.hex()],
+        input=ciphertext, capture_output=True)
+    if result.returncode != 0:
+        return None
+    # Some Chromium builds (e.g. ungoogled-chromium / Helium) prepend 32 random
+    # bytes to the plaintext before encryption; try offset 0 first, then 32.
+    for offset in (0, 32):
+        try:
+            val = result.stdout[offset:].decode('utf-8')
+            if val:
+                return val
+        except (UnicodeDecodeError, ValueError):
+            continue
+    return None
+
+for base_dir, key_service in entries:
+    if not os.path.isdir(base_dir):
+        continue
+    for profile_dir in sorted(glob.glob(os.path.join(base_dir, '*'))):
+        db = os.path.join(profile_dir, 'Cookies')
+        if not os.path.isfile(db):
+            continue
+        tmp = None
+        try:
+            fd, tmp = tempfile.mkstemp()
+            os.close(fd)
+            shutil.copy2(db, tmp)
+            conn = sqlite3.connect(tmp)
+            row = conn.execute(
+                "SELECT hex(encrypted_value) FROM cookies "
+                "WHERE host_key LIKE '%cursor.com%' AND name='WorkosCursorSessionToken' LIMIT 1"
+            ).fetchone()
+            conn.close()
+        except Exception:
+            continue
+        finally:
+            if tmp and os.path.exists(tmp):
+                os.unlink(tmp)
+        if not row:
+            continue
+        val = decrypt(row[0], key_service)
+        if val:
+            print(val, end='')
+            sys.exit(0)
+
+sys.exit(1)
+PYEOF
 }
 
 # Try all browsers; print the cookie value and return 0 on success.
@@ -852,10 +864,58 @@ get_cursor_cookie_from_browser() {
   return 1
 }
 
+# macOS: cookie cached in the login Keychain (encrypted by the OS).
+#        -T /usr/bin/security grants the security CLI silent read access so
+#        subsequent lookups never prompt.
+# Linux: cookie cached in a 600-permission file (no libsecret dependency).
+_CURSOR_KEYCHAIN_SERVICE="aiusage-cursor-session"
+_CURSOR_COOKIE_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/aiusage/cursor_cookie"
+
+_cursor_cache_read() {
+  if [[ "$OSTYPE" == darwin* ]]; then
+    security find-generic-password -s "$_CURSOR_KEYCHAIN_SERVICE" -a "$USER" -w 2>/dev/null
+  else
+    [[ -f "$_CURSOR_COOKIE_CACHE" ]] || return 1
+    local now mtime age
+    now=$(date +%s)
+    mtime=$(stat -c %Y "$_CURSOR_COOKIE_CACHE" 2>/dev/null) || return 1
+    age=$(( now - mtime ))
+    (( age < 604800 )) || { rm -f "$_CURSOR_COOKIE_CACHE"; return 1; }
+    cat "$_CURSOR_COOKIE_CACHE"
+  fi
+}
+
+_cursor_cache_write() {
+  if [[ "$OSTYPE" == darwin* ]]; then
+    # -T /usr/bin/security: allow the security CLI to read this item without
+    # a future confirmation dialog.  -U: update if the item already exists.
+    security add-generic-password \
+      -s "$_CURSOR_KEYCHAIN_SERVICE" -a "$USER" -w "$1" \
+      -T /usr/bin/security -U 2>/dev/null || true
+  else
+    mkdir -p "$(dirname "$_CURSOR_COOKIE_CACHE")"
+    printf '%s' "$1" > "$_CURSOR_COOKIE_CACHE"
+    chmod 600 "$_CURSOR_COOKIE_CACHE"
+  fi
+}
+
+_cursor_cache_clear() {
+  if [[ "$OSTYPE" == darwin* ]]; then
+    security delete-generic-password \
+      -s "$_CURSOR_KEYCHAIN_SERVICE" -a "$USER" 2>/dev/null || true
+  else
+    rm -f "$_CURSOR_COOKIE_CACHE"
+  fi
+}
+
 fetch_cursor() {
   local cookie="${CURSOR_COOKIE:-}"
   if [[ -z "$cookie" ]]; then
+    cookie=$(_cursor_cache_read) || true
+  fi
+  if [[ -z "$cookie" ]]; then
     cookie=$(get_cursor_cookie_from_browser) || true
+    [[ -n "$cookie" ]] && _cursor_cache_write "$cookie"
   fi
   if [[ -z "$cookie" ]]; then
     draw_error "no Cursor session found — set CURSOR_COOKIE or log in via a browser"
@@ -915,7 +975,7 @@ fetch_cursor() {
 
   if [[ "$me_status" != 2* ]] || [[ -z "$me_resp" ]]; then
     case "$me_status" in
-    401 | 403) draw_error "session expired — re-login at cursor.com or update CURSOR_COOKIE" ;;
+    401 | 403) _cursor_cache_clear; draw_error "session expired — re-login at cursor.com or update CURSOR_COOKIE" ;;
     000)       draw_error "network error or request timed out" ;;
     *)         draw_error "request failed (HTTP $me_status)" ;;
     esac
@@ -939,7 +999,7 @@ fetch_cursor() {
 
   if [[ "$usage_status" != 2* ]] || [[ -z "$usage_resp" ]]; then
     case "$usage_status" in
-    401 | 403) draw_error "session expired — re-login at cursor.com or update CURSOR_COOKIE" ;;
+    401 | 403) _cursor_cache_clear; draw_error "session expired — re-login at cursor.com or update CURSOR_COOKIE" ;;
     000)       draw_error "network error or request timed out" ;;
     *)         draw_error "request failed (HTTP $usage_status)" ;;
     esac
