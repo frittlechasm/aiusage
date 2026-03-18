@@ -4,19 +4,20 @@
 
 Simple CLI command to check usage limits of your AI Subscription usage. 
 
-Currently supports : 
-- Claude 
-- Codex 
+Currently supports :
+- Claude
+- Codex
+- Cursor
 - Gemini CLI
 - JetBrains AI
 
 Planned next:
-- Cursor
 - GitHub Copilot
 
 ## Features
 - Shows `5h` and `Weekly` usage bars for Claude
 - Shows `5h` and `Weekly` usage bars for Codex
+- Shows Cursor monthly credit / request usage — auto-detects session from Firefox, Chrome, Arc, Brave, Edge, or Helium; or set `CURSOR_COOKIE` manually
 - Shows Gemini CLI quota usage for Google OAuth / Code Assist accounts
 - Shows JetBrains AI credit usage from local IDE quota state
 - Shows local reset time for each usage window (when available)
@@ -28,6 +29,7 @@ Planned next:
 - `curl`
 - `jq`
 - Authenticated local CLIs (`claude`, `codex`, and/or `gemini`) and/or a local JetBrains IDE with AI Assistant enabled
+- Cursor: `sqlite3` + a supported browser logged in to cursor.com (or set `CURSOR_COOKIE`); Chromium-based browsers also require `python3` and `openssl` for cookie decryption
 
 ## Install
 ```bash
@@ -44,6 +46,9 @@ chmod +x ./aiusage
 # Codex only
 ./aiusage codex
 
+# Cursor only (auto-detects from browser, or set CURSOR_COOKIE)
+./aiusage cursor
+
 # Gemini only
 ./aiusage gemini
 
@@ -58,6 +63,7 @@ chmod +x ./aiusage
 - If the Gemini session has expired, re-run `gemini` to refresh the local login before using `aiusage gemini`.
 - JetBrains usage is read from the newest local `AIAssistantQuotaManager2.xml` file by modification time under your JetBrains config directory.
 - If multiple JetBrains IDE configs exist, `aiusage` picks the most recently updated quota file.
+- Cursor session is read automatically from your browser's cookie store (Firefox via `sqlite3`; Chrome/Arc/Brave/Edge/Helium via `sqlite3` + `python3` + `openssl`). The browser does not need to be open. Alternatively, set `CURSOR_COOKIE` to the value of the `WorkosCursorSessionToken` cookie from browser DevTools.
 - If auth or endpoint access is unavailable, it renders `unavailable` bars.
 - Endpoints and response shapes can change over time.
 
