@@ -112,7 +112,7 @@ draw_http_error() {
   esac
 }
 
-ALL_PROVIDERS=(claude codex cursor gemini jetbrains)
+ALL_PROVIDERS=(claude codex cursor gemini jetbrains copilot)
 
 provider_label() {
   case "$1" in
@@ -121,6 +121,7 @@ provider_label() {
   cursor) printf "Cursor" ;;
   gemini) printf "Gemini" ;;
   jetbrains) printf "JetBrains" ;;
+  copilot) printf "Copilot" ;;
   *) return 1 ;;
   esac
 }
@@ -132,13 +133,14 @@ provider_fetch_fn() {
   cursor) printf "fetch_cursor" ;;
   gemini) printf "fetch_gemini" ;;
   jetbrains) printf "fetch_jetbrains" ;;
+  copilot) printf "fetch_copilot" ;;
   *) return 1 ;;
   esac
 }
 
 provider_is_known() {
   case "$1" in
-  claude | codex | cursor | gemini | jetbrains) return 0 ;;
+  claude | codex | cursor | gemini | jetbrains | copilot) return 0 ;;
   *) return 1 ;;
   esac
 }
@@ -161,6 +163,7 @@ provider_unavailable_message() {
   cursor) printf "Cursor not available — set CURSOR_COOKIE or ensure a supported browser (Firefox/Chrome/Arc/Brave/Edge) with sqlite3 is present" ;;
   gemini) printf "gemini is not installed" ;;
   jetbrains) printf "jetbrains usage data is unavailable" ;;
+  copilot) printf "copilot not available — set COPILOT_GITHUB_TOKEN or run: copilot login" ;;
   *) return 1 ;;
   esac
 }
@@ -172,6 +175,7 @@ provider_available() {
   cursor) [[ -n "${CURSOR_COOKIE:-}" ]] || _cursor_has_browser ;;
   gemini) command -v gemini >/dev/null 2>&1 ;;
   jetbrains) [[ -n "$(find_jetbrains_quota_file)" ]] ;;
+  copilot) _copilot_auth_source_available ;;
   *) return 1 ;;
   esac
 }
@@ -1266,6 +1270,229 @@ fetch_jetbrains() {
   fi
 }
 
+# ── copilot ─────────────────────────────────────────────
+
+# macOS: token cached in the login Keychain (encrypted by the OS).
+# Linux: token cached in a 600-permission file (no libsecret dependency).
+_COPILOT_KEYCHAIN_SERVICE="aiusage-copilot-token"
+_COPILOT_TOKEN_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/aiusage/copilot_token"
+_COPILOT_CONFIG_FILE="${COPILOT_CONFIG_DIR:-$HOME/.copilot}/config.json"
+
+_copilot_cache_read() {
+  if [[ "$OSTYPE" == darwin* ]]; then
+    security find-generic-password -s "$_COPILOT_KEYCHAIN_SERVICE" -a "$USER" -w 2>/dev/null
+  else
+    [[ -f "$_COPILOT_TOKEN_CACHE" ]] || return 1
+    local now mtime age
+    now=$(date +%s)
+    mtime=$(stat -c %Y "$_COPILOT_TOKEN_CACHE" 2>/dev/null) || return 1
+    age=$(( now - mtime ))
+    (( age < 2592000 )) || { rm -f "$_COPILOT_TOKEN_CACHE"; return 1; }  # 30 days
+    cat "$_COPILOT_TOKEN_CACHE"
+  fi
+}
+
+_copilot_cache_write() {
+  if [[ "$OSTYPE" == darwin* ]]; then
+    security add-generic-password \
+      -s "$_COPILOT_KEYCHAIN_SERVICE" -a "$USER" -w "$1" \
+      -U 2>/dev/null || true
+  else
+    mkdir -p "$(dirname "$_COPILOT_TOKEN_CACHE")"
+    printf '%s' "$1" > "$_COPILOT_TOKEN_CACHE"
+    chmod 600 "$_COPILOT_TOKEN_CACHE"
+  fi
+}
+
+_copilot_cache_clear() {
+  if [[ "$OSTYPE" == darwin* ]]; then
+    security delete-generic-password \
+      -s "$_COPILOT_KEYCHAIN_SERVICE" -a "$USER" 2>/dev/null || true
+  else
+    rm -f "$_COPILOT_TOKEN_CACHE"
+  fi
+}
+
+_copilot_active_account() {
+  [[ -f "$_COPILOT_CONFIG_FILE" ]] || return 1
+  jq -r '[
+      (.last_logged_in_user.host // .logged_in_users[0].host // "https://github.com"),
+      (.last_logged_in_user.login // .logged_in_users[0].login // "")
+    ] | @tsv' "$_COPILOT_CONFIG_FILE" 2>/dev/null
+}
+
+_copilot_token_from_env() {
+  if [[ -n "${COPILOT_GITHUB_TOKEN:-}" ]]; then
+    printf '%s' "$COPILOT_GITHUB_TOKEN"
+  else
+    return 1
+  fi
+}
+
+_copilot_token_from_plaintext_config() {
+  [[ -f "$_COPILOT_CONFIG_FILE" ]] || return 1
+  jq -r '
+    limit(1;
+      .. | strings |
+      select(test("^(github_pat_|gho_|ghu_)[A-Za-z0-9_]+$"))
+    ) // empty
+  ' "$_COPILOT_CONFIG_FILE" 2>/dev/null
+}
+
+_copilot_token_from_keychain() {
+  local account_host="$1" account_login="$2" account_key
+  [[ -n "$account_login" ]] || return 1
+
+  if [[ "$OSTYPE" == darwin* ]] && command -v security >/dev/null 2>&1; then
+    account_key="${account_host}:${account_login}"
+    security find-generic-password -s "copilot-cli" -a "$account_key" -w 2>/dev/null
+  elif command -v secret-tool >/dev/null 2>&1; then
+    account_key="${account_host}:${account_login}"
+    secret-tool lookup service "copilot-cli" account "$account_key" 2>/dev/null ||
+      secret-tool lookup service "copilot-cli" 2>/dev/null
+  else
+    return 1
+  fi
+}
+
+_copilot_resolve_token() {
+  local account_info account_host="https://github.com" account_login="" token=""
+
+  token=$(_copilot_token_from_env) || true
+  [[ -n "$token" ]] && { printf '%s' "$token"; return 0; }
+
+  token=$(_copilot_cache_read) || true
+  [[ -n "$token" ]] && { printf '%s' "$token"; return 0; }
+
+  account_info=$(_copilot_active_account) || true
+  if [[ -n "$account_info" ]]; then
+    IFS=$'\t' read -r account_host account_login <<<"$account_info"
+    [[ -n "$account_host" ]] || account_host="https://github.com"
+  fi
+
+  token=$(_copilot_token_from_keychain "$account_host" "$account_login") || true
+  if [[ -n "$token" ]]; then
+    _copilot_cache_write "$token"
+    printf '%s' "$token"
+    return 0
+  fi
+
+  token=$(_copilot_token_from_plaintext_config) || true
+  if [[ -n "$token" ]]; then
+    _copilot_cache_write "$token"
+    printf '%s' "$token"
+    return 0
+  fi
+
+  return 1
+}
+
+_copilot_auth_source_available() {
+  [[ -n "${COPILOT_GITHUB_TOKEN:-}" ]] && return 0
+  _copilot_cache_read >/dev/null 2>&1 && return 0
+  _copilot_active_account >/dev/null 2>&1 && return 0
+  command -v copilot >/dev/null 2>&1
+}
+
+fetch_copilot() {
+  local token=""
+
+  token=$(_copilot_resolve_token) || true
+
+  if [[ -z "$token" ]]; then
+    draw_error "not logged in — set COPILOT_GITHUB_TOKEN or run: copilot login"
+    return
+  fi
+
+  local resp _status
+  http_json "https://api.github.com/copilot_internal/user" "" \
+    "Authorization: token $token" \
+    "Accept: application/json" \
+    "Editor-Version: vscode/1.96.2" \
+    "Editor-Plugin-Version: copilot-chat/0.26.7" \
+    "User-Agent: GitHubCopilotChat/0.26.7" \
+    "X-Github-Api-Version: 2025-04-01"
+  resp="$HTTP_BODY"
+  _status="$HTTP_STATUS"
+
+  if [[ "$_status" != 2* ]] || [[ -z "$resp" ]]; then
+    [[ "$_status" == "401" || "$_status" == "403" ]] && _copilot_cache_clear
+    draw_http_error "$_status" "session expired — run: copilot login"
+    return
+  fi
+
+  local plan sku
+  plan=$(printf '%s' "$resp" | jq -r '.copilot_plan // ""' 2>/dev/null)
+  sku=$(printf '%s' "$resp" | jq -r '.access_type_sku // ""' 2>/dev/null)
+
+  # ── Step 1: try quota_snapshots (paid/pro plans) ──────────────────────────
+  # Fields use snake_case: quota_snapshots.premium_interactions / .chat
+  # Skip snapshots where unlimited==true (no meaningful quota limit to track).
+  local premium_pct chat_pct
+  local qs_p_pct qs_p_ent qs_p_rem qs_c_pct qs_c_ent qs_c_rem
+  qs_p_pct=$(printf '%s' "$resp" | jq -r '(.quota_snapshots.premium_interactions | if . == null or .unlimited == true then "" else (.percent_remaining // "") end)' 2>/dev/null)
+  qs_p_ent=$(printf '%s' "$resp" | jq -r '(.quota_snapshots.premium_interactions | if . == null or .unlimited == true then "" else (.entitlement // "") end)' 2>/dev/null)
+  qs_p_rem=$(printf '%s' "$resp" | jq -r '(.quota_snapshots.premium_interactions | if . == null or .unlimited == true then "" else (.remaining // "") end)' 2>/dev/null)
+  qs_c_pct=$(printf '%s' "$resp" | jq -r '(.quota_snapshots.chat | if . == null or .unlimited == true then "" else (.percent_remaining // "") end)' 2>/dev/null)
+  qs_c_ent=$(printf '%s' "$resp" | jq -r '(.quota_snapshots.chat | if . == null or .unlimited == true then "" else (.entitlement // "") end)' 2>/dev/null)
+  qs_c_rem=$(printf '%s' "$resp" | jq -r '(.quota_snapshots.chat | if . == null or .unlimited == true then "" else (.remaining // "") end)' 2>/dev/null)
+
+  # Use percent_remaining if present; otherwise derive from entitlement + remaining
+  if [[ -n "$qs_p_pct" && "$qs_p_pct" != "null" ]]; then
+    premium_pct="$qs_p_pct"
+  elif [[ -n "$qs_p_ent" && "$qs_p_ent" != "null" && -n "$qs_p_rem" && "$qs_p_rem" != "null" ]]; then
+    premium_pct=$(awk "BEGIN{ e=$qs_p_ent; if(e>0) printf \"%.1f\", ($qs_p_rem/e)*100 }" 2>/dev/null || true)
+  fi
+
+  if [[ -n "$qs_c_pct" && "$qs_c_pct" != "null" ]]; then
+    chat_pct="$qs_c_pct"
+  elif [[ -n "$qs_c_ent" && "$qs_c_ent" != "null" && -n "$qs_c_rem" && "$qs_c_rem" != "null" ]]; then
+    chat_pct=$(awk "BEGIN{ e=$qs_c_ent; if(e>0) printf \"%.1f\", ($qs_c_rem/e)*100 }" 2>/dev/null || true)
+  fi
+
+  # ── Step 2: fallback — derive from monthly_quotas + limited_user_quotas ───
+  # monthly_quotas = entitlement (limit); limited_user_quotas = remaining
+  local mq_completions lq_completions mq_chat lq_chat
+  mq_completions=$(printf '%s' "$resp" | jq -r '.monthly_quotas.completions // ""' 2>/dev/null)
+  lq_completions=$(printf '%s' "$resp" | jq -r '.limited_user_quotas.completions // ""' 2>/dev/null)
+  mq_chat=$(printf '%s' "$resp" | jq -r '.monthly_quotas.chat // ""' 2>/dev/null)
+  lq_chat=$(printf '%s' "$resp" | jq -r '.limited_user_quotas.chat // ""' 2>/dev/null)
+
+  if [[ -z "$premium_pct" ]] && [[ -n "$mq_completions" && "$mq_completions" != "null" ]] && [[ -n "$lq_completions" && "$lq_completions" != "null" ]]; then
+    premium_pct=$(awk "BEGIN{ e=$mq_completions; if(e>0) printf \"%.1f\", ($lq_completions/e)*100 }" 2>/dev/null || true)
+  fi
+
+  if [[ -z "$chat_pct" ]] && [[ -n "$mq_chat" && "$mq_chat" != "null" ]] && [[ -n "$lq_chat" && "$lq_chat" != "null" ]]; then
+    chat_pct=$(awk "BEGIN{ e=$mq_chat; if(e>0) printf \"%.1f\", ($lq_chat/e)*100 }" 2>/dev/null || true)
+  fi
+
+  local reset_date reset_epoch
+  reset_date=$(printf '%s' "$resp" | jq -r '.quota_reset_date // .limited_user_reset_date // ""' 2>/dev/null)
+  # Expand plain YYYY-MM-DD so normalize_epoch can parse it
+  [[ "$reset_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && reset_date="${reset_date}T00:00:00"
+  reset_epoch=$(normalize_epoch "$reset_date")
+
+  # ── Render ────────────────────────────────────────────────────────────────
+  if [[ -n "$premium_pct" || -n "$chat_pct" ]]; then
+    local premium_used chat_used
+    if [[ -n "$premium_pct" ]]; then
+      premium_used=$(awk "BEGIN{printf \"%.0f\", 100 - $premium_pct}" 2>/dev/null || echo "0")
+      draw_bar "Premium" "$premium_used"
+    fi
+    if [[ -n "$chat_pct" ]]; then
+      chat_used=$(awk "BEGIN{printf \"%.0f\", 100 - $chat_pct}" 2>/dev/null || echo "0")
+      [[ -n "$premium_pct" ]] && printf "\n"
+      draw_bar "Chat" "$chat_used"
+    fi
+    draw_reset "$reset_epoch"
+    [[ -n "$plan" ]] && printf "  %-8s ${DIM}%s${RESET}\n" "" "$plan"
+  else
+    # No quota data (e.g. Copilot Business seat — limits managed at org level)
+    local plan_label="${sku:-${plan:-unknown}}"
+    printf "  %-8s ${DIM}%s${RESET}\n" "Plan" "${plan_label//_/ }"
+  fi
+}
+
 # ── main ────────────────────────────────────────────────
 
 usage() {
@@ -1278,6 +1505,7 @@ Providers:
   cursor    Show Cursor usage (auto-detects from browser or CURSOR_COOKIE)
   gemini    Show Gemini CLI usage
   jetbrains Show JetBrains AI usage
+  copilot   Show GitHub Copilot usage (uses copilot login or COPILOT_GITHUB_TOKEN)
 
 Pass one or more providers to print only those sections.
 Omit provider, or pass 'all', to print all detected providers.
