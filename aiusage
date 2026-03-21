@@ -69,18 +69,82 @@ draw_credits_line() {
   printf "  %-8s ${DIM}\$%s / \$%s${RESET}\n" "" "$used_fmt" "$limit_fmt"
 }
 
+HTTP_STATUS="000"
+HTTP_BODY=""
 http_json() {
-  local tmp_body status
-  tmp_body=$(mktemp)
+  local url="$1" body="$2"
+  shift 2
 
-  if ! status=$(curl -s --max-time 10 -w "%{http_code}" -o "$tmp_body" "$@" 2>/dev/null); then
+  local tmp_body headers_file body_file="" status
+  tmp_body=$(mktemp)
+  headers_file=$(mktemp)
+  chmod 600 "$headers_file" 2>/dev/null || true
+
+  if (($# > 0)); then
+    printf '%s\n' "$@" >"$headers_file"
+  fi
+
+  if [[ -n "$body" ]]; then
+    body_file=$(mktemp)
+    chmod 600 "$body_file" 2>/dev/null || true
+    printf '%s' "$body" >"$body_file"
+  fi
+
+  local curl_args=(-s --max-time 10 -w "%{http_code}" -o "$tmp_body")
+  [[ -s "$headers_file" ]] && curl_args+=(-H "@$headers_file")
+  [[ -n "$body_file" ]] && curl_args+=(--data-binary "@$body_file")
+
+  if ! status=$(curl "${curl_args[@]}" "$url" 2>/dev/null); then
     status="000"
   fi
   [[ "$status" =~ ^[0-9]{3}$ ]] || status="000"
+  HTTP_STATUS="$status"
+  HTTP_BODY=$(cat "$tmp_body")
+  rm -f "$tmp_body" "$headers_file" "$body_file"
+}
 
-  [[ -n "${HTTP_STATUS_FILE:-}" ]] && printf "%s" "$status" >"$HTTP_STATUS_FILE"
-  cat "$tmp_body"
-  rm -f "$tmp_body"
+draw_http_error() {
+  local status="$1" expired_msg="$2"
+  case "$status" in
+  401 | 403) draw_error "$expired_msg" ;;
+  000) draw_error "network error or request timed out" ;;
+  *) draw_error "request failed (HTTP $status)" ;;
+  esac
+}
+
+ALL_PROVIDERS=(claude codex cursor gemini jetbrains)
+
+provider_label() {
+  case "$1" in
+  claude) printf "Claude" ;;
+  codex) printf "Codex" ;;
+  cursor) printf "Cursor" ;;
+  gemini) printf "Gemini" ;;
+  jetbrains) printf "JetBrains" ;;
+  *) return 1 ;;
+  esac
+}
+
+provider_fetch_fn() {
+  case "$1" in
+  claude) printf "fetch_claude" ;;
+  codex) printf "fetch_codex" ;;
+  cursor) printf "fetch_cursor" ;;
+  gemini) printf "fetch_gemini" ;;
+  jetbrains) printf "fetch_jetbrains" ;;
+  *) return 1 ;;
+  esac
+}
+
+provider_unavailable_message() {
+  case "$1" in
+  claude) printf "claude is not installed" ;;
+  codex) printf "codex is not installed" ;;
+  cursor) printf "Cursor not available — set CURSOR_COOKIE or ensure a supported browser (Firefox/Chrome/Arc/Brave/Edge) with sqlite3 is present" ;;
+  gemini) printf "gemini is not installed" ;;
+  jetbrains) printf "jetbrains usage data is unavailable" ;;
+  *) return 1 ;;
+  esac
 }
 
 provider_available() {
@@ -312,95 +376,50 @@ render_provider_section() {
 }
 
 RENDERED_LINES=0
+WAIT_LABELS=()
+WAIT_PIDS=()
+WAIT_TMPS=()
+WAIT_DONE=()
+
 render_fetch_state() {
-  local frame="$1"
-  local label1="$2" tmp1="$3" done1="$4"
-  local label2="$5" tmp2="$6" done2="$7" has_second="$8"
-  local label3="${9:-}" tmp3="${10:-}" done3="${11:-0}" has_third="${12:-0}"
-  local label4="${13:-}" tmp4="${14:-}" done4="${15:-0}" has_fourth="${16:-0}"
-  local label5="${17:-}" tmp5="${18:-}" done5="${19:-0}" has_fifth="${20:-0}"
-  local lines=0
+  local frame="$1" lines=0 i
 
-  render_provider_section "$label1" "$tmp1" "$done1" "$frame"
-  lines=$((lines + SECTION_LINES))
-
-  if ((has_second)); then
-    render_line ""
-    ((lines++))
-    render_provider_section "$label2" "$tmp2" "$done2" "$frame"
+  for ((i = 0; i < ${#WAIT_LABELS[@]}; i++)); do
+    if ((i > 0)); then
+      render_line ""
+      ((lines++))
+    fi
+    render_provider_section "${WAIT_LABELS[$i]}" "${WAIT_TMPS[$i]}" "${WAIT_DONE[$i]:-0}" "$frame"
     lines=$((lines + SECTION_LINES))
-  fi
-
-  if ((has_third)); then
-    render_line ""
-    ((lines++))
-    render_provider_section "$label3" "$tmp3" "$done3" "$frame"
-    lines=$((lines + SECTION_LINES))
-  fi
-
-  if ((has_fourth)); then
-    render_line ""
-    ((lines++))
-    render_provider_section "$label4" "$tmp4" "$done4" "$frame"
-    lines=$((lines + SECTION_LINES))
-  fi
-
-  if ((has_fifth)); then
-    render_line ""
-    ((lines++))
-    render_provider_section "$label5" "$tmp5" "$done5" "$frame"
-    lines=$((lines + SECTION_LINES))
-  fi
+  done
 
   RENDERED_LINES="$lines"
 }
 
 wait_and_render_fetches() {
-  local label1="$1" pid1="$2" tmp1="$3"
-  local label2="${4:-}" pid2="${5:-}" tmp2="${6:-}"
-  local label3="${7:-}" pid3="${8:-}" tmp3="${9:-}"
-  local label4="${10:-}" pid4="${11:-}" tmp4="${12:-}"
-  local label5="${13:-}" pid5="${14:-}" tmp5="${15:-}"
-  local has_second=0 has_third=0 has_fourth=0 has_fifth=0 frame=0 prev_lines=0
-  local done1 done2 done3 done4 done5
-
-  [[ -n "$pid2" ]] && has_second=1
-  [[ -n "$pid3" ]] && has_third=1
-  [[ -n "$pid4" ]] && has_fourth=1
-  [[ -n "$pid5" ]] && has_fifth=1
+  local frame=0 prev_lines=0 i done all_done
 
   hide_cursor
   while true; do
-    done1=0
-    done2=0
-    done3=0
-    done4=0
-    done5=0
-
-    kill -0 "$pid1" 2>/dev/null || done1=1
-    if ((has_second)); then
-      kill -0 "$pid2" 2>/dev/null || done2=1
-    fi
-    if ((has_third)); then
-      kill -0 "$pid3" 2>/dev/null || done3=1
-    fi
-    if ((has_fourth)); then
-      kill -0 "$pid4" 2>/dev/null || done4=1
-    fi
-    if ((has_fifth)); then
-      kill -0 "$pid5" 2>/dev/null || done5=1
-    fi
+    WAIT_DONE=()
+    all_done=1
+    for ((i = 0; i < ${#WAIT_PIDS[@]}; i++)); do
+      done=0
+      kill -0 "${WAIT_PIDS[$i]}" 2>/dev/null || done=1
+      WAIT_DONE+=("$done")
+      ((done)) || all_done=0
+    done
 
     if [[ -t 1 ]]; then
       move_to_render_start "$prev_lines"
-      render_fetch_state "$frame" "$label1" "$tmp1" "$done1" "$label2" "$tmp2" "$done2" "$has_second" "$label3" "$tmp3" "$done3" "$has_third" "$label4" "$tmp4" "$done4" "$has_fourth" "$label5" "$tmp5" "$done5" "$has_fifth"
+      render_fetch_state "$frame"
       clear_extra_render_lines $((prev_lines - RENDERED_LINES))
       if ((RENDERED_LINES > prev_lines)); then
         prev_lines="$RENDERED_LINES"
       fi
     fi
 
-    if ((done1)) && ((!has_second || done2)) && ((!has_third || done3)) && ((!has_fourth || done4)) && ((!has_fifth || done5)); then
+    if ((all_done)); then
       break
     fi
 
@@ -408,145 +427,86 @@ wait_and_render_fetches() {
     frame=$((frame + 1))
   done
 
-  wait "$pid1" || true
-  ((has_second)) && { wait "$pid2" || true; }
-  ((has_third)) && { wait "$pid3" || true; }
-  ((has_fourth)) && { wait "$pid4" || true; }
-  ((has_fifth)) && { wait "$pid5" || true; }
+  for pid in "${WAIT_PIDS[@]}"; do
+    wait "$pid" || true
+  done
 
   if [[ ! -t 1 ]]; then
-    render_fetch_state "$frame" "$label1" "$tmp1" 1 "$label2" "$tmp2" "$has_second" "$has_second" "$label3" "$tmp3" "$has_third" "$has_third" "$label4" "$tmp4" "$has_fourth" "$has_fourth" "$label5" "$tmp5" "$has_fifth" "$has_fifth"
+    WAIT_DONE=()
+    for ((i = 0; i < ${#WAIT_LABELS[@]}; i++)); do
+      WAIT_DONE+=(1)
+    done
+    render_fetch_state "$frame"
   fi
 
   show_cursor
 }
 
-run_provider_with_loading() {
-  local label="$1" fetch_fn="$2"
-  local tmp pid
-  tmp=$(mktemp)
+cleanup_running_fetches() {
+  local pid tmp
+  show_cursor
+  for pid in "${WAIT_PIDS[@]}"; do
+    [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
+  done
+  for tmp in "${WAIT_TMPS[@]}"; do
+    [[ -n "$tmp" ]] && rm -f "$tmp"
+  done
+}
 
-  "$fetch_fn" >"$tmp" &
-  pid=$!
+start_provider_fetches() {
+  local provider label fetch_fn tmp
+  WAIT_LABELS=()
+  WAIT_PIDS=()
+  WAIT_TMPS=()
+  WAIT_DONE=()
 
-  cleanup() {
-    show_cursor
-    rm -f "$tmp"
-    kill "$pid" 2>/dev/null
-  }
-  trap 'cleanup; trap - INT;  kill -INT  $$' INT
-  trap 'cleanup; trap - TERM; kill -TERM $$' TERM
-  trap 'cleanup' EXIT
+  for provider in "$@"; do
+    label=$(provider_label "$provider")
+    fetch_fn=$(provider_fetch_fn "$provider")
+    tmp=$(mktemp)
+    "$fetch_fn" >"$tmp" &
+    WAIT_LABELS+=("$label")
+    WAIT_PIDS+=("$!")
+    WAIT_TMPS+=("$tmp")
+  done
+}
 
-  wait_and_render_fetches "$label" "$pid" "$tmp"
-  rm -f "$tmp"
+run_fetches_with_loading() {
+  start_provider_fetches "$@"
+
+  trap 'cleanup_running_fetches; trap - INT;  kill -INT  $$' INT
+  trap 'cleanup_running_fetches; trap - TERM; kill -TERM $$' TERM
+  trap 'cleanup_running_fetches' EXIT
+
+  wait_and_render_fetches
+  cleanup_running_fetches
+  WAIT_LABELS=()
+  WAIT_PIDS=()
+  WAIT_TMPS=()
+  WAIT_DONE=()
   trap - EXIT INT TERM
 }
 
-run_all_parallel() {
-  local has_claude=0 has_codex=0 has_cursor=0 has_gemini=0 has_jetbrains=0
-  if provider_available claude; then has_claude=1; fi
-  if provider_available codex; then has_codex=1; fi
-  if provider_available cursor; then has_cursor=1; fi
-  if provider_available gemini; then has_gemini=1; fi
-  if provider_available jetbrains; then has_jetbrains=1; fi
+run_provider_with_loading() {
+  run_fetches_with_loading "$1"
+}
 
-  local total=$((has_claude + has_codex + has_cursor + has_gemini + has_jetbrains))
-  if ((total == 0)); then
-    printf "No AI providers found (claude, codex, cursor, gemini, jetbrains).\n" >&2
+run_all_parallel() {
+  local available=() provider provider_list
+
+  for provider in "${ALL_PROVIDERS[@]}"; do
+    if provider_available "$provider"; then
+      available+=("$provider")
+    fi
+  done
+
+  if (( ${#available[@]} == 0 )); then
+    provider_list=$(printf "%s, " "${ALL_PROVIDERS[@]}")
+    provider_list="${provider_list%, }"
+    printf "No AI providers found (%s).\n" "$provider_list" >&2
     return 1
   fi
-  if ((has_claude && total == 1)); then run_provider_with_loading "Claude" fetch_claude; return; fi
-  if ((has_codex && total == 1)); then run_provider_with_loading "Codex" fetch_codex; return; fi
-  if ((has_cursor && total == 1)); then run_provider_with_loading "Cursor" fetch_cursor; return; fi
-  if ((has_gemini && total == 1)); then run_provider_with_loading "Gemini" fetch_gemini; return; fi
-  if ((has_jetbrains && total == 1)); then run_provider_with_loading "JetBrains" fetch_jetbrains; return; fi
-
-  local claude_tmp="" codex_tmp="" cursor_tmp="" gemini_tmp="" jetbrains_tmp=""
-  local claude_pid="" codex_pid="" cursor_pid="" gemini_pid="" jetbrains_pid=""
-
-  if ((has_claude)); then
-    claude_tmp=$(mktemp)
-    fetch_claude >"$claude_tmp" &
-    claude_pid=$!
-  fi
-  if ((has_codex)); then
-    codex_tmp=$(mktemp)
-    fetch_codex >"$codex_tmp" &
-    codex_pid=$!
-  fi
-  if ((has_cursor)); then
-    cursor_tmp=$(mktemp)
-    fetch_cursor >"$cursor_tmp" &
-    cursor_pid=$!
-  fi
-  if ((has_gemini)); then
-    gemini_tmp=$(mktemp)
-    fetch_gemini >"$gemini_tmp" &
-    gemini_pid=$!
-  fi
-  if ((has_jetbrains)); then
-    jetbrains_tmp=$(mktemp)
-    fetch_jetbrains >"$jetbrains_tmp" &
-    jetbrains_pid=$!
-  fi
-
-  cleanup() {
-    show_cursor
-    [[ -n "$claude_tmp" ]] && rm -f "$claude_tmp"
-    [[ -n "$codex_tmp" ]] && rm -f "$codex_tmp"
-    [[ -n "$cursor_tmp" ]] && rm -f "$cursor_tmp"
-    [[ -n "$gemini_tmp" ]] && rm -f "$gemini_tmp"
-    [[ -n "$jetbrains_tmp" ]] && rm -f "$jetbrains_tmp"
-    [[ -n "$claude_pid" ]] && kill "$claude_pid" 2>/dev/null || true
-    [[ -n "$codex_pid" ]] && kill "$codex_pid" 2>/dev/null || true
-    [[ -n "$cursor_pid" ]] && kill "$cursor_pid" 2>/dev/null || true
-    [[ -n "$gemini_pid" ]] && kill "$gemini_pid" 2>/dev/null || true
-    [[ -n "$jetbrains_pid" ]] && kill "$jetbrains_pid" 2>/dev/null || true
-  }
-  trap 'cleanup; trap - INT;  kill -INT  $$' INT
-  trap 'cleanup; trap - TERM; kill -TERM $$' TERM
-  trap 'cleanup' EXIT
-
-  local labels=() pids=() tmps=()
-  if ((has_claude)); then
-    labels+=("Claude")
-    pids+=("$claude_pid")
-    tmps+=("$claude_tmp")
-  fi
-  if ((has_codex)); then
-    labels+=("Codex")
-    pids+=("$codex_pid")
-    tmps+=("$codex_tmp")
-  fi
-  if ((has_cursor)); then
-    labels+=("Cursor")
-    pids+=("$cursor_pid")
-    tmps+=("$cursor_tmp")
-  fi
-  if ((has_gemini)); then
-    labels+=("Gemini")
-    pids+=("$gemini_pid")
-    tmps+=("$gemini_tmp")
-  fi
-  if ((has_jetbrains)); then
-    labels+=("JetBrains")
-    pids+=("$jetbrains_pid")
-    tmps+=("$jetbrains_tmp")
-  fi
-
-  wait_and_render_fetches \
-    "${labels[0]}" "${pids[0]}" "${tmps[0]}" \
-    "${labels[1]:-}" "${pids[1]:-}" "${tmps[1]:-}" \
-    "${labels[2]:-}" "${pids[2]:-}" "${tmps[2]:-}" \
-    "${labels[3]:-}" "${pids[3]:-}" "${tmps[3]:-}" \
-    "${labels[4]:-}" "${pids[4]:-}" "${tmps[4]:-}"
-  [[ -n "$claude_tmp" ]] && rm -f "$claude_tmp"
-  [[ -n "$codex_tmp" ]] && rm -f "$codex_tmp"
-  [[ -n "$cursor_tmp" ]] && rm -f "$cursor_tmp"
-  [[ -n "$gemini_tmp" ]] && rm -f "$gemini_tmp"
-  [[ -n "$jetbrains_tmp" ]] && rm -f "$jetbrains_tmp"
-  trap - EXIT INT TERM
+  run_fetches_with_loading "${available[@]}"
 }
 
 # ── claude ──────────────────────────────────────────────
@@ -569,22 +529,17 @@ fetch_claude() {
     return
   fi
 
-  local _sf resp _status
-  _sf=$(mktemp)
-  resp=$(HTTP_STATUS_FILE="$_sf" http_json \
-    -H "Authorization: Bearer $token" \
-    -H "anthropic-beta: oauth-2025-04-20" \
-    -H "Accept: application/json" \
-    "https://api.anthropic.com/api/oauth/usage")
-  _status=$(cat "$_sf" 2>/dev/null || echo "000")
-  rm -f "$_sf"
+  local resp _status
+  http_json \
+    "https://api.anthropic.com/api/oauth/usage" "" \
+    "Authorization: Bearer $token" \
+    "anthropic-beta: oauth-2025-04-20" \
+    "Accept: application/json"
+  resp="$HTTP_BODY"
+  _status="$HTTP_STATUS"
 
   if [[ "$_status" != 2* ]] || [[ -z "$resp" ]]; then
-    case "$_status" in
-    401 | 403) draw_error "session expired run: claude /login" ;;
-    000) draw_error "network error or request timed out" ;;
-    *) draw_error "request failed (HTTP $_status)" ;;
-    esac
+    draw_http_error "$_status" "session expired run: claude /login"
     return
   fi
 
@@ -650,21 +605,16 @@ fetch_codex() {
     return
   fi
 
-  local headers=(-H "Authorization: Bearer $token" -H "Accept: application/json")
-  [[ -n "$account_id" ]] && headers+=(-H "ChatGPT-Account-Id: $account_id")
+  local headers=("Authorization: Bearer $token" "Accept: application/json")
+  [[ -n "$account_id" ]] && headers+=("ChatGPT-Account-Id: $account_id")
 
-  local _sf resp _status
-  _sf=$(mktemp)
-  resp=$(HTTP_STATUS_FILE="$_sf" http_json "${headers[@]}" "https://chatgpt.com/backend-api/wham/usage")
-  _status=$(cat "$_sf" 2>/dev/null || echo "000")
-  rm -f "$_sf"
+  local resp _status
+  http_json "https://chatgpt.com/backend-api/wham/usage" "" "${headers[@]}"
+  resp="$HTTP_BODY"
+  _status="$HTTP_STATUS"
 
   if [[ "$_status" != 2* ]] || [[ -z "$resp" ]]; then
-    case "$_status" in
-    401 | 403) draw_error "session expired log in to Codex again" ;;
-    000) draw_error "network error or request timed out" ;;
-    *) draw_error "request failed (HTTP $_status)" ;;
-    esac
+    draw_http_error "$_status" "session expired log in to Codex again"
     return
   fi
 
@@ -701,21 +651,28 @@ fetch_codex() {
 # Fast check: is any supported browser with sqlite3 present?
 _cursor_has_browser() {
   command -v sqlite3 >/dev/null 2>&1 || return 1
+  local has_firefox=0 has_chromium=0
+
   if [[ "$OSTYPE" == darwin* ]]; then
-    [[ -d "$HOME/Library/Application Support/Firefox/Profiles" ]] ||
-      [[ -d "$HOME/Library/Application Support/Google/Chrome" ]] ||
-      [[ -d "$HOME/Library/Application Support/Chromium" ]] ||
-      [[ -d "$HOME/Library/Application Support/Arc" ]] ||
-      [[ -d "$HOME/Library/Application Support/BraveSoftware" ]] ||
-      [[ -d "$HOME/Library/Application Support/Microsoft Edge" ]] ||
-      [[ -d "$HOME/Library/Application Support/net.imput.helium" ]]
+    [[ -d "$HOME/Library/Application Support/Firefox/Profiles" ]] && has_firefox=1
+    [[ -d "$HOME/Library/Application Support/Google/Chrome" ]] && has_chromium=1
+    [[ -d "$HOME/Library/Application Support/Chromium" ]] && has_chromium=1
+    [[ -d "$HOME/Library/Application Support/Arc" ]] && has_chromium=1
+    [[ -d "$HOME/Library/Application Support/BraveSoftware" ]] && has_chromium=1
+    [[ -d "$HOME/Library/Application Support/Microsoft Edge" ]] && has_chromium=1
+    [[ -d "$HOME/Library/Application Support/net.imput.helium" ]] && has_chromium=1
   else
-    [[ -d "$HOME/.mozilla/firefox" ]] ||
-      [[ -d "$HOME/.config/google-chrome" ]] ||
-      [[ -d "$HOME/.config/chromium" ]] ||
-      [[ -d "$HOME/.config/brave-browser" ]] ||
-      [[ -d "$HOME/.config/net.imput.helium" ]]
+    [[ -d "$HOME/.mozilla/firefox" ]] && has_firefox=1
+    [[ -d "$HOME/.config/google-chrome" ]] && has_chromium=1
+    [[ -d "$HOME/.config/chromium" ]] && has_chromium=1
+    [[ -d "$HOME/.config/brave-browser" ]] && has_chromium=1
+    [[ -d "$HOME/.config/net.imput.helium" ]] && has_chromium=1
   fi
+
+  ((has_firefox)) && return 0
+  ((has_chromium)) || return 1
+  command -v python3 >/dev/null 2>&1 || return 1
+  command -v openssl >/dev/null 2>&1
 }
 
 # Extract WorkosCursorSessionToken from Firefox cookies.sqlite (unencrypted)
@@ -865,8 +822,6 @@ get_cursor_cookie_from_browser() {
 }
 
 # macOS: cookie cached in the login Keychain (encrypted by the OS).
-#        -T /usr/bin/security grants the security CLI silent read access so
-#        subsequent lookups never prompt.
 # Linux: cookie cached in a 600-permission file (no libsecret dependency).
 _CURSOR_KEYCHAIN_SERVICE="aiusage-cursor-session"
 _CURSOR_COOKIE_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/aiusage/cursor_cookie"
@@ -887,11 +842,11 @@ _cursor_cache_read() {
 
 _cursor_cache_write() {
   if [[ "$OSTYPE" == darwin* ]]; then
-    # -T /usr/bin/security: allow the security CLI to read this item without
-    # a future confirmation dialog.  -U: update if the item already exists.
+    # Keep the default keychain access controls so future reads still require
+    # the user's normal approval policy. -U updates the existing item in place.
     security add-generic-password \
       -s "$_CURSOR_KEYCHAIN_SERVICE" -a "$USER" -w "$1" \
-      -T /usr/bin/security -U 2>/dev/null || true
+      -U 2>/dev/null || true
   else
     mkdir -p "$(dirname "$_CURSOR_COOKIE_CACHE")"
     printf '%s' "$1" > "$_CURSOR_COOKIE_CACHE"
@@ -923,17 +878,15 @@ fetch_cursor() {
   fi
 
   local cookie_hdr="Cookie: WorkosCursorSessionToken=$cookie"
-  local _sf
 
   # Step 1: try modern usage-summary endpoint (current plans — credits-based)
   local sum_resp sum_status
-  _sf=$(mktemp)
-  sum_resp=$(HTTP_STATUS_FILE="$_sf" http_json \
-    -H "$cookie_hdr" \
-    -H "Accept: application/json" \
-    "https://cursor.com/api/usage-summary")
-  sum_status=$(cat "$_sf" 2>/dev/null || echo "000")
-  rm -f "$_sf"
+  http_json \
+    "https://cursor.com/api/usage-summary" "" \
+    "$cookie_hdr" \
+    "Accept: application/json"
+  sum_resp="$HTTP_BODY"
+  sum_status="$HTTP_STATUS"
 
   if [[ "$sum_status" == 2* ]] && [[ -n "$sum_resp" ]]; then
     local plan_percent billing_end od_used od_limit
@@ -965,20 +918,16 @@ fetch_cursor() {
 
   # Step 2: fall back to legacy request-count endpoint — requires user ID
   local me_resp me_status user_id
-  _sf=$(mktemp)
-  me_resp=$(HTTP_STATUS_FILE="$_sf" http_json \
-    -H "$cookie_hdr" \
-    -H "Accept: application/json" \
-    "https://cursor.com/api/auth/me")
-  me_status=$(cat "$_sf" 2>/dev/null || echo "000")
-  rm -f "$_sf"
+  http_json \
+    "https://cursor.com/api/auth/me" "" \
+    "$cookie_hdr" \
+    "Accept: application/json"
+  me_resp="$HTTP_BODY"
+  me_status="$HTTP_STATUS"
 
   if [[ "$me_status" != 2* ]] || [[ -z "$me_resp" ]]; then
-    case "$me_status" in
-    401 | 403) _cursor_cache_clear; draw_error "session expired — re-login at cursor.com or update CURSOR_COOKIE" ;;
-    000)       draw_error "network error or request timed out" ;;
-    *)         draw_error "request failed (HTTP $me_status)" ;;
-    esac
+    [[ "$me_status" == "401" || "$me_status" == "403" ]] && _cursor_cache_clear
+    draw_http_error "$me_status" "session expired — re-login at cursor.com or update CURSOR_COOKIE"
     return
   fi
 
@@ -989,20 +938,16 @@ fetch_cursor() {
   fi
 
   local usage_resp usage_status
-  _sf=$(mktemp)
-  usage_resp=$(HTTP_STATUS_FILE="$_sf" http_json \
-    -H "$cookie_hdr" \
-    -H "Accept: application/json" \
-    "https://cursor.com/api/usage?user=$user_id")
-  usage_status=$(cat "$_sf" 2>/dev/null || echo "000")
-  rm -f "$_sf"
+  http_json \
+    "https://cursor.com/api/usage?user=$user_id" "" \
+    "$cookie_hdr" \
+    "Accept: application/json"
+  usage_resp="$HTTP_BODY"
+  usage_status="$HTTP_STATUS"
 
   if [[ "$usage_status" != 2* ]] || [[ -z "$usage_resp" ]]; then
-    case "$usage_status" in
-    401 | 403) _cursor_cache_clear; draw_error "session expired — re-login at cursor.com or update CURSOR_COOKIE" ;;
-    000)       draw_error "network error or request timed out" ;;
-    *)         draw_error "request failed (HTTP $usage_status)" ;;
-    esac
+    [[ "$usage_status" == "401" || "$usage_status" == "403" ]] && _cursor_cache_clear
+    draw_http_error "$usage_status" "session expired — re-login at cursor.com or update CURSOR_COOKIE"
     return
   fi
 
@@ -1026,12 +971,6 @@ fetch_cursor() {
 }
 
 # ── gemini ──────────────────────────────────────────────
-
-gemini_account_email() {
-  local accounts_file="${HOME}/.gemini/google_accounts.json"
-  [[ -f "$accounts_file" ]] || return 0
-  jq -r '.active // empty' "$accounts_file" 2>/dev/null || true
-}
 
 gemini_bucket_info() {
   case "$1" in
@@ -1068,34 +1007,28 @@ fetch_gemini() {
     fi
   fi
 
-  local metadata project_hint load_resp project_id quota_resp
-  local _sf load_status quota_status
-  metadata='{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}'
+  local project_hint load_body load_resp project_id quota_body quota_resp
+  local load_status quota_status
   project_hint="${GOOGLE_CLOUD_PROJECT:-${GOOGLE_CLOUD_PROJECT_ID:-}}"
 
-  _sf=$(mktemp)
-  if [[ -n "$project_hint" ]]; then
-    load_resp=$(HTTP_STATUS_FILE="$_sf" http_json \
-      -H "Authorization: Bearer $access_token" \
-      -H "Content-Type: application/json" \
-      -d "{\"cloudaicompanionProject\":\"$project_hint\",\"metadata\":$metadata}" \
-      "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist")
-  else
-    load_resp=$(HTTP_STATUS_FILE="$_sf" http_json \
-      -H "Authorization: Bearer $access_token" \
-      -H "Content-Type: application/json" \
-      -d "{\"metadata\":$metadata}" \
-      "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist")
-  fi
-  load_status=$(cat "$_sf" 2>/dev/null || echo "000")
-  rm -f "$_sf"
+  load_body=$(jq -cn --arg project_hint "$project_hint" '
+    {
+      metadata: {
+        ideType: "IDE_UNSPECIFIED",
+        platform: "PLATFORM_UNSPECIFIED",
+        pluginType: "GEMINI"
+      }
+    } + (if $project_hint == "" then {} else {cloudaicompanionProject: $project_hint} end)
+  ' 2>/dev/null)
+  http_json \
+    "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist" "$load_body" \
+    "Authorization: Bearer $access_token" \
+    "Content-Type: application/json"
+  load_resp="$HTTP_BODY"
+  load_status="$HTTP_STATUS"
 
   if [[ "$load_status" != 2* ]] || [[ -z "$load_resp" ]]; then
-    case "$load_status" in
-    401 | 403) draw_error "session expired run: gemini" ;;
-    000) draw_error "network error or request timed out" ;;
-    *) draw_error "request failed (HTTP $load_status)" ;;
-    esac
+    draw_http_error "$load_status" "session expired run: gemini"
     return
   fi
 
@@ -1113,21 +1046,16 @@ fetch_gemini() {
     return
   fi
 
-  _sf=$(mktemp)
-  quota_resp=$(HTTP_STATUS_FILE="$_sf" http_json \
-    -H "Authorization: Bearer $access_token" \
-    -H "Content-Type: application/json" \
-    -d "{\"project\":\"$project_id\"}" \
-    "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota")
-  quota_status=$(cat "$_sf" 2>/dev/null || echo "000")
-  rm -f "$_sf"
+  quota_body=$(jq -cn --arg project_id "$project_id" '{project: $project_id}' 2>/dev/null)
+  http_json \
+    "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota" "$quota_body" \
+    "Authorization: Bearer $access_token" \
+    "Content-Type: application/json"
+  quota_resp="$HTTP_BODY"
+  quota_status="$HTTP_STATUS"
 
   if [[ "$quota_status" != 2* ]] || [[ -z "$quota_resp" ]]; then
-    case "$quota_status" in
-    401 | 403) draw_error "session expired run: gemini" ;;
-    000) draw_error "network error or request timed out" ;;
-    *) draw_error "request failed (HTTP $quota_status)" ;;
-    esac
+    draw_http_error "$quota_status" "session expired run: gemini"
     return
   fi
 
@@ -1239,16 +1167,13 @@ fetch_jetbrains() {
     return
   fi
 
-  local quota_type current maximum until tariff_current tariff_max topup_current topup_max duration quota_values
+  local current maximum until topup_current topup_max duration quota_values
   quota_values=$(
     {
       printf '%s' "$quota_info" | jq -r '[
-        (.type // ""),
         (.current // ""),
         (.maximum // ""),
         (.until // ""),
-        (.tariffQuota.current // ""),
-        (.tariffQuota.maximum // ""),
         (.topUpQuota.current // ""),
         (.topUpQuota.maximum // "")
       ] | @tsv' 2>/dev/null
@@ -1257,7 +1182,7 @@ fetch_jetbrains() {
       printf '\n'
     }
   )
-  IFS=$'\t' read -r quota_type current maximum until tariff_current tariff_max topup_current topup_max duration <<<"$quota_values"
+  IFS=$'\t' read -r current maximum until topup_current topup_max duration <<<"$quota_values"
 
   if [[ -z "$maximum" || "$maximum" == "0" || "$maximum" == "null" ]]; then
     draw_error "JetBrains quota limit is unavailable"
@@ -1308,46 +1233,25 @@ Omit provider to print all detected providers.
 EOF
 }
 
+run_named_provider() {
+  local provider="$1" unavailable_msg
+  if ! provider_available "$provider"; then
+    unavailable_msg=$(provider_unavailable_message "$provider")
+    printf "%s\n" "$unavailable_msg" >&2
+    exit 1
+  fi
+
+  run_provider_with_loading "$provider"
+}
+
 provider="${1:-all}"
 
 case "$provider" in
 all)
   run_all_parallel
   ;;
-claude)
-  if ! provider_available claude; then
-    printf "claude is not installed\n" >&2
-    exit 1
-  fi
-  run_provider_with_loading "Claude" fetch_claude
-  ;;
-codex)
-  if ! provider_available codex; then
-    printf "codex is not installed\n" >&2
-    exit 1
-  fi
-  run_provider_with_loading "Codex" fetch_codex
-  ;;
-cursor)
-  if ! provider_available cursor; then
-    printf "Cursor not available — set CURSOR_COOKIE or ensure a supported browser (Firefox/Chrome/Arc/Brave/Edge) with sqlite3 is present\n" >&2
-    exit 1
-  fi
-  run_provider_with_loading "Cursor" fetch_cursor
-  ;;
-gemini)
-  if ! provider_available gemini; then
-    printf "gemini is not installed\n" >&2
-    exit 1
-  fi
-  run_provider_with_loading "Gemini" fetch_gemini
-  ;;
-jetbrains)
-  if ! provider_available jetbrains; then
-    printf "jetbrains usage data is unavailable\n" >&2
-    exit 1
-  fi
-  run_provider_with_loading "JetBrains" fetch_jetbrains
+claude | codex | cursor | gemini | jetbrains)
+  run_named_provider "$provider"
   ;;
 -h | --help | help)
   usage
