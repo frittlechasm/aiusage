@@ -1,10 +1,10 @@
-![aiusage screenshot](img.png)
-
 # aiusage
 
-Simple CLI command to check usage limits of your AI Subscription usage. 
+Tiny CLI to check AI subscription usage from a single self-contained Bash script.
 
-Currently supports :
+No build step. No daemon. No framework. No web scraping. Just `bash`, `curl`, `jq`.
+
+Currently supports:
 - Claude
 - Codex
 - Cursor
@@ -12,23 +12,32 @@ Currently supports :
 - JetBrains AI
 - GitHub Copilot
 
-## Features
-- Shows `5h` and `Weekly` usage bars for Claude
-- Shows `5h` and `Weekly` usage bars for Codex
-- Shows Cursor monthly credit / request usage — auto-detects session from Firefox, Chrome, Arc, Brave, Edge, or Helium; or set `CURSOR_COOKIE` manually
-- Shows Gemini CLI quota usage for Google OAuth / Code Assist accounts
-- Shows JetBrains AI credit usage from local IDE quota state
-- Shows GitHub Copilot `Premium` and `Chat` quota bars — uses `copilot login` or `COPILOT_GITHUB_TOKEN`
-- Shows local reset time for each usage window (when available)
-- No web scraping
-- Single bash script
+## Why this is nice
+- Single script: [`./aiusage`](aiusage)
+- Core dependencies stay minimal: `bash`, `curl`, `jq`
+- Works on anything that runs bash
+- Reads the auth/session state you already have locally
+- Fetches usage directly from provider-backed endpoints when available
+
+## What it shows
+- Claude `5h` and `Weekly` usage bars
+- Codex `5h` and `Weekly` usage bars
+- Cursor monthly credit or request usage
+- Gemini CLI quota usage for Google OAuth / Code Assist accounts
+- JetBrains AI credit usage from local IDE quota state
+- GitHub Copilot `Premium` and `Chat` quota bars
+- Local reset time for each window when the provider exposes it
+
+![aiusage CLI output](aiusage-screenshot.png)
 
 ## Requirements
-- `bash`
-- `curl`
-- `jq`
-- Authenticated local CLIs (`claude`, `codex`, and/or `gemini`) and/or a local JetBrains IDE with AI Assistant enabled
-- Cursor: `sqlite3` + a supported browser logged in to cursor.com (or set `CURSOR_COOKIE`); Chromium-based browsers also require `python3` and `openssl` for cookie decryption
+- Required: `bash`, `curl`, `jq`
+- Claude: local `claude` login
+- Codex: local `codex` login
+- Cursor: `sqlite3` and a supported browser logged into `cursor.com`, or set `CURSOR_COOKIE`
+- Cursor on Chromium-based browsers: `python3` and `openssl` for cookie decryption
+- Gemini: local `gemini` login
+- JetBrains: a local JetBrains IDE with AI Assistant enabled
 - Copilot: run `copilot login` or set `COPILOT_GITHUB_TOKEN`
 
 ## Install
@@ -50,20 +59,24 @@ chmod +x ./aiusage
 ./aiusage codex gemini jetbrains copilot
 ```
 
-## Notes
-- This script reads local auth state from your machine and then calls provider backend endpoints.
-  (for example `~/.codex/auth.json`, `~/.gemini/oauth_creds.json`, Claude credentials/keychain, and JetBrains local quota files)
-- Gemini CLI support uses the local OAuth login created by `gemini` and queries Gemini Code Assist quota endpoints while the local access token is still valid.
-- If the Gemini session has expired, re-run `gemini` to refresh the local login before using `aiusage gemini`.
-- JetBrains usage is read from the newest local `AIAssistantQuotaManager2.xml` file by modification time under your JetBrains config directory.
-- If multiple JetBrains IDE configs exist, `aiusage` picks the most recently updated quota file.
-- Cursor session is read automatically from your browser's cookie store (Firefox via `sqlite3`; Chrome/Arc/Brave/Edge/Helium via `sqlite3` + `python3` + `openssl`). The browser does not need to be open. Alternatively, set `CURSOR_COOKIE` to the value of the `WorkosCursorSessionToken` cookie from browser DevTools.
-- Copilot token lookup is intentionally limited to dedicated Copilot auth so it does not accidentally use a different GitHub account: `COPILOT_GITHUB_TOKEN`, the local `aiusage` cache, then the `copilot login` credential store / plaintext `~/.copilot/config.json` fallback. Tokens discovered from the Copilot store/plaintext fallback are cached and the cache is cleared automatically on auth failure.
-- Copilot quota bars reflect `Premium` (premium interactions / completions) and `Chat` usage. Unlimited quotas (e.g. Copilot Business chat) are not shown. Plans with no tracked individual quota show the plan name only.
-- If auth or endpoint access is unavailable, it renders `unavailable` bars.
-- Endpoints and response shapes can change over time.
+## How it works
+- It reads local auth or quota state already present on your machine, then calls the provider usage endpoints.
+- Example local sources include `~/.codex/auth.json`, `~/.gemini/oauth_creds.json`, Claude credentials, browser cookies for Cursor, and JetBrains quota files.
+- If auth is missing, expired, or the upstream endpoint changed, that provider is shown as unavailable or returns an error line.
 
-## Security
-> [!IMPORTANT]
-> Do not commit your token files.
-> Avoid running this script on shared multi-user machines unless you trust the environment.
+## Provider notes
+- Gemini uses the OAuth login created by `gemini`; if the session is expired, run `gemini` again.
+- JetBrains usage is read from the newest local `AIAssistantQuotaManager2.xml` under your JetBrains config directory.
+- Cursor session lookup is automatic from Firefox, Chrome, Arc, Brave, Edge, or Helium; you can also set `CURSOR_COOKIE` manually.
+- Copilot token lookup prefers `COPILOT_GITHUB_TOKEN`, then the local `aiusage` cache, then `copilot login` credentials, then plaintext `~/.copilot/config.json` fallback.
+- Copilot plans with unlimited or org-managed quotas may show only the plan name instead of bars.
+- Provider endpoints and response shapes can change over time.
+
+## Security notes
+Treat this as a local utility with access to existing auth state.
+
+- This script reads local auth files, local quota files, and in Cursor's case browser cookie stores. Run it only on machines you trust.
+- On macOS, extracted Cursor and Copilot credentials are cached in the login Keychain. On Linux, they are cached in `~/.cache/aiusage/` with `0600` permissions because the script avoids extra secret-storage dependencies.
+- If you set `CURSOR_COOKIE` or `COPILOT_GITHUB_TOKEN` manually, avoid leaving them in shell history or dotfiles.
+- Do not commit token files, copied cookies, or cache files.
+- Because this is a plain Bash script, you can audit exactly what it reads and what URLs it calls before running it.
