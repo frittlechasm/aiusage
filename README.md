@@ -80,3 +80,6 @@ Treat this as a local utility with access to existing auth state.
 - If you set `CURSOR_COOKIE` or `COPILOT_GITHUB_TOKEN` manually, avoid leaving them in shell history or dotfiles.
 - Do not commit token files, copied cookies, or cache files.
 - Because this is a plain Bash script, you can audit exactly what it reads and what URLs it calls before running it.
+
+
+![aiusage repo image](img.png)
