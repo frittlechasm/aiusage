@@ -136,6 +136,24 @@ provider_fetch_fn() {
   esac
 }
 
+provider_is_known() {
+  case "$1" in
+  claude | codex | cursor | gemini | jetbrains) return 0 ;;
+  *) return 1 ;;
+  esac
+}
+
+provider_list_contains() {
+  local needle="$1" item
+  shift
+
+  for item in "$@"; do
+    [[ "$item" == "$needle" ]] && return 0
+  done
+
+  return 1
+}
+
 provider_unavailable_message() {
   case "$1" in
   claude) printf "claude is not installed" ;;
@@ -489,6 +507,38 @@ run_fetches_with_loading() {
 
 run_provider_with_loading() {
   run_fetches_with_loading "$1"
+}
+
+run_named_providers() {
+  local selected=() unavailable=() provider unavailable_msg
+
+  for provider in "$@"; do
+    if (( ${#selected[@]} > 0 )) && provider_list_contains "$provider" "${selected[@]}"; then
+      continue
+    fi
+    if (( ${#unavailable[@]} > 0 )) && provider_list_contains "$provider" "${unavailable[@]}"; then
+      continue
+    fi
+
+    if provider_available "$provider"; then
+      selected+=("$provider")
+    else
+      unavailable+=("$provider")
+    fi
+  done
+
+  if (( ${#selected[@]} > 0 )); then
+    run_fetches_with_loading "${selected[@]}"
+  fi
+
+  if (( ${#unavailable[@]} > 0 )); then
+    for provider in "${unavailable[@]}"; do
+      unavailable_msg=$(provider_unavailable_message "$provider")
+      printf "%s\n" "$unavailable_msg" >&2
+    done
+  fi
+
+  (( ${#selected[@]} > 0 ))
 }
 
 run_all_parallel() {
@@ -1220,48 +1270,64 @@ fetch_jetbrains() {
 
 usage() {
   cat <<'EOF'
-Usage: aiusage [provider]
+Usage: aiusage [provider ...]
 
 Providers:
-  claude    Show only Claude usage
-  codex     Show only Codex usage
-  cursor    Show only Cursor usage (auto-detects from browser or CURSOR_COOKIE)
-  gemini    Show only Gemini CLI usage
-  jetbrains Show only JetBrains AI usage
+  claude    Show Claude usage
+  codex     Show Codex usage
+  cursor    Show Cursor usage (auto-detects from browser or CURSOR_COOKIE)
+  gemini    Show Gemini CLI usage
+  jetbrains Show JetBrains AI usage
 
-Omit provider to print all detected providers.
+Pass one or more providers to print only those sections.
+Omit provider, or pass 'all', to print all detected providers.
 EOF
 }
 
-run_named_provider() {
-  local provider="$1" unavailable_msg
-  if ! provider_available "$provider"; then
-    unavailable_msg=$(provider_unavailable_message "$provider")
-    printf "%s\n" "$unavailable_msg" >&2
-    exit 1
+run_from_args() {
+  local requested=() arg exit_code=0
+  local run_all=0
+
+  if (($# == 0)); then
+    run_all_parallel
+    return
   fi
 
-  run_provider_with_loading "$provider"
+  for arg in "$@"; do
+    case "$arg" in
+    -h | --help | help)
+      usage
+      return
+      ;;
+    all)
+      run_all=1
+      ;;
+    *)
+      if ! provider_is_known "$arg"; then
+        printf "Unknown provider: %s\n\n" "$arg" >&2
+        usage >&2
+        return 1
+      fi
+
+      if (( ${#requested[@]} == 0 )) || ! provider_list_contains "$arg" "${requested[@]}"; then
+        requested+=("$arg")
+      fi
+      ;;
+    esac
+  done
+
+  if ((run_all)); then
+    run_all_parallel
+    return
+  fi
+
+  if ! run_named_providers "${requested[@]}"; then
+    exit_code=1
+  fi
+
+  return "$exit_code"
 }
 
-provider="${1:-all}"
-
-case "$provider" in
-all)
-  run_all_parallel
-  ;;
-claude | codex | cursor | gemini | jetbrains)
-  run_named_provider "$provider"
-  ;;
--h | --help | help)
-  usage
-  exit 0
-  ;;
-*)
-  printf "Unknown provider: %s\n\n" "$provider" >&2
-  usage >&2
-  exit 1
-  ;;
-esac
+run_from_args "$@"
 
 printf "\n"

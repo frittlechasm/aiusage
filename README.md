@@ -43,17 +43,11 @@ chmod +x ./aiusage
 # Claude only
 ./aiusage claude
 
-# Codex only
-./aiusage codex
+# Cursor + Claude
+./aiusage cursor claude
 
-# Cursor only (auto-detects from browser, or set CURSOR_COOKIE)
-./aiusage cursor
-
-# Gemini only
-./aiusage gemini
-
-# JetBrains only
-./aiusage jetbrains
+# Any subset, in the order you want
+./aiusage codex gemini jetbrains
 ```
 
 ## Notes
