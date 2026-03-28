@@ -69,6 +69,63 @@ draw_credits_line() {
   printf "  %-8s ${DIM}\$%s / \$%s${RESET}\n" "" "$used_fmt" "$limit_fmt"
 }
 
+calculate_percent() {
+  local used="${1:-0}" limit="${2:-0}" fallback="${3:-0}"
+  awk "BEGIN{l=$limit; if (l > 0) printf \"%.0f\", ($used / l) * 100; else print $fallback}" 2>/dev/null || echo "$fallback"
+}
+
+calculate_used_percent_from_remaining() {
+  local remaining="${1:-}" fallback="${2:-0}"
+  [[ -n "$remaining" && "$remaining" != "null" ]] || {
+    echo "$fallback"
+    return 0
+  }
+  awk "BEGIN{printf \"%.0f\", 100 - $remaining}" 2>/dev/null || echo "$fallback"
+}
+
+macos_keychain_read() {
+  local service="$1"
+  command -v security >/dev/null 2>&1 || return 1
+  security find-generic-password -s "$service" -a "$USER" -w 2>/dev/null
+}
+
+macos_keychain_write() {
+  local service="$1" value="$2"
+  command -v security >/dev/null 2>&1 || return 1
+  # Keep the default keychain access controls so future reads still require
+  # the user's normal approval policy. -U updates the existing item in place.
+  security add-generic-password -s "$service" -a "$USER" -w "$value" -U 2>/dev/null
+}
+
+macos_keychain_clear() {
+  local service="$1"
+  command -v security >/dev/null 2>&1 || return 1
+  security delete-generic-password -s "$service" -a "$USER" 2>/dev/null
+}
+
+linux_ttl_cache_read() {
+  local path="$1" ttl="$2"
+  [[ -f "$path" ]] || return 1
+
+  local now mtime age
+  now=$(date +%s)
+  mtime=$(stat -c %Y "$path" 2>/dev/null) || return 1
+  age=$(( now - mtime ))
+  (( age < ttl )) || {
+    rm -f "$path"
+    return 1
+  }
+
+  cat "$path"
+}
+
+linux_secure_cache_write() {
+  local path="$1" value="$2"
+  mkdir -p "$(dirname "$path")"
+  printf '%s' "$value" >"$path"
+  chmod 600 "$path"
+}
+
 HTTP_STATUS="000"
 HTTP_BODY=""
 http_json() {
@@ -99,7 +156,7 @@ http_json() {
   fi
   [[ "$status" =~ ^[0-9]{3}$ ]] || status="000"
   HTTP_STATUS="$status"
-  HTTP_BODY=$(cat "$tmp_body")
+  HTTP_BODY=$(<"$tmp_body")
   rm -f "$tmp_body" "$headers_file" "$body_file"
 }
 
@@ -365,26 +422,19 @@ render_compact_status_line() {
   printf "\r\033[2K%b%s%b %d/%d providers complete" "$DIM" "$spin" "$RESET" "$done_count" "$total_count"
 }
 
-SECTION_LINES=0
 render_provider_section() {
   local label="$1" tmp_file="$2" done="$3" frame="$4"
-  local lines=0
 
   if ((done)); then
     render_heading_line "$label"
-    lines=1
     while IFS= read -r line || [[ -n "$line" ]]; do
       render_line "$line"
-      ((lines++))
     done <"$tmp_file"
   else
     local spin
     spin=$(spinner_frame "$frame")
     render_spinner_line "$label" "$spin"
-    lines=1
   fi
-
-  SECTION_LINES="$lines"
 }
 
 WAIT_LABELS=()
@@ -393,15 +443,13 @@ WAIT_TMPS=()
 WAIT_DONE=()
 
 render_fetch_state() {
-  local frame="$1" lines=0 i
+  local frame="$1" i
 
   for ((i = 0; i < ${#WAIT_LABELS[@]}; i++)); do
     if ((i > 0)); then
       render_line ""
-      ((lines++))
     fi
     render_provider_section "${WAIT_LABELS[$i]}" "${WAIT_TMPS[$i]}" "${WAIT_DONE[$i]:-0}" "$frame"
-    lines=$((lines + SECTION_LINES))
   done
 
 }
@@ -870,39 +918,27 @@ get_cursor_cookie_from_browser() {
 # Linux: cookie cached in a 600-permission file (no libsecret dependency).
 _CURSOR_KEYCHAIN_SERVICE="aiusage-cursor-session"
 _CURSOR_COOKIE_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/aiusage/cursor_cookie"
+_CURSOR_COOKIE_CACHE_TTL=604800
 
 _cursor_cache_read() {
   if [[ "$OSTYPE" == darwin* ]]; then
-    security find-generic-password -s "$_CURSOR_KEYCHAIN_SERVICE" -a "$USER" -w 2>/dev/null
+    macos_keychain_read "$_CURSOR_KEYCHAIN_SERVICE"
   else
-    [[ -f "$_CURSOR_COOKIE_CACHE" ]] || return 1
-    local now mtime age
-    now=$(date +%s)
-    mtime=$(stat -c %Y "$_CURSOR_COOKIE_CACHE" 2>/dev/null) || return 1
-    age=$(( now - mtime ))
-    (( age < 604800 )) || { rm -f "$_CURSOR_COOKIE_CACHE"; return 1; }
-    cat "$_CURSOR_COOKIE_CACHE"
+    linux_ttl_cache_read "$_CURSOR_COOKIE_CACHE" "$_CURSOR_COOKIE_CACHE_TTL"
   fi
 }
 
 _cursor_cache_write() {
   if [[ "$OSTYPE" == darwin* ]]; then
-    # Keep the default keychain access controls so future reads still require
-    # the user's normal approval policy. -U updates the existing item in place.
-    security add-generic-password \
-      -s "$_CURSOR_KEYCHAIN_SERVICE" -a "$USER" -w "$1" \
-      -U 2>/dev/null || true
+    macos_keychain_write "$_CURSOR_KEYCHAIN_SERVICE" "$1" || true
   else
-    mkdir -p "$(dirname "$_CURSOR_COOKIE_CACHE")"
-    printf '%s' "$1" > "$_CURSOR_COOKIE_CACHE"
-    chmod 600 "$_CURSOR_COOKIE_CACHE"
+    linux_secure_cache_write "$_CURSOR_COOKIE_CACHE" "$1"
   fi
 }
 
 _cursor_cache_clear() {
   if [[ "$OSTYPE" == darwin* ]]; then
-    security delete-generic-password \
-      -s "$_CURSOR_KEYCHAIN_SERVICE" -a "$USER" 2>/dev/null || true
+    macos_keychain_clear "$_CURSOR_KEYCHAIN_SERVICE" || true
   else
     rm -f "$_CURSOR_COOKIE_CACHE"
   fi
@@ -952,7 +988,7 @@ fetch_cursor() {
 
       if [[ -n "$od_limit" && "$od_limit" != "0" && "$od_limit" != "null" ]]; then
         local od_percent
-        od_percent=$(awk "BEGIN{printf \"%.0f\", (${od_used:-0} / $od_limit) * 100}" 2>/dev/null || echo 0)
+        od_percent=$(calculate_percent "${od_used:-0}" "$od_limit")
         printf "\n"
         draw_bar "On-demand" "$od_percent"
         draw_credits_line "${od_used:-0}" "$od_limit"
@@ -1010,7 +1046,7 @@ fetch_cursor() {
   fi
 
   local percent
-  percent=$(awk "BEGIN{printf \"%.0f\", (${used:-0} / $limit) * 100}" 2>/dev/null || echo 0)
+  percent=$(calculate_percent "${used:-0}" "$limit")
   draw_bar "Monthly" "$percent"
   printf "  %-8s ${DIM}%s / %s requests${RESET}\n" "" "${used:-0}" "$limit"
 }
@@ -1235,7 +1271,7 @@ fetch_jetbrains() {
   fi
 
   local percent reset_epoch label
-  percent=$(awk "BEGIN{printf \"%.0f\", ($current / $maximum) * 100}" 2>/dev/null || true)
+  percent=$(calculate_percent "$current" "$maximum" "")
   reset_epoch=$(normalize_epoch "$until")
   label=$(duration_to_label "$duration")
 
@@ -1250,7 +1286,7 @@ fetch_jetbrains() {
 
   if [[ -n "$topup_max" && "$topup_max" != "0" && "$topup_max" != "null" ]]; then
     local topup_percent
-    topup_percent=$(awk "BEGIN{printf \"%.0f\", ($topup_current / $topup_max) * 100}" 2>/dev/null || true)
+    topup_percent=$(calculate_percent "$topup_current" "$topup_max" "")
     printf "\n"
     if [[ -n "$topup_percent" ]]; then
       draw_bar "Top-up" "$topup_percent"
@@ -1268,37 +1304,27 @@ fetch_jetbrains() {
 _COPILOT_KEYCHAIN_SERVICE="aiusage-copilot-token"
 _COPILOT_TOKEN_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/aiusage/copilot_token"
 _COPILOT_CONFIG_FILE="${COPILOT_CONFIG_DIR:-$HOME/.copilot}/config.json"
+_COPILOT_TOKEN_CACHE_TTL=2592000
 
 _copilot_cache_read() {
   if [[ "$OSTYPE" == darwin* ]]; then
-    security find-generic-password -s "$_COPILOT_KEYCHAIN_SERVICE" -a "$USER" -w 2>/dev/null
+    macos_keychain_read "$_COPILOT_KEYCHAIN_SERVICE"
   else
-    [[ -f "$_COPILOT_TOKEN_CACHE" ]] || return 1
-    local now mtime age
-    now=$(date +%s)
-    mtime=$(stat -c %Y "$_COPILOT_TOKEN_CACHE" 2>/dev/null) || return 1
-    age=$(( now - mtime ))
-    (( age < 2592000 )) || { rm -f "$_COPILOT_TOKEN_CACHE"; return 1; }  # 30 days
-    cat "$_COPILOT_TOKEN_CACHE"
+    linux_ttl_cache_read "$_COPILOT_TOKEN_CACHE" "$_COPILOT_TOKEN_CACHE_TTL"
   fi
 }
 
 _copilot_cache_write() {
   if [[ "$OSTYPE" == darwin* ]]; then
-    security add-generic-password \
-      -s "$_COPILOT_KEYCHAIN_SERVICE" -a "$USER" -w "$1" \
-      -U 2>/dev/null || true
+    macos_keychain_write "$_COPILOT_KEYCHAIN_SERVICE" "$1" || true
   else
-    mkdir -p "$(dirname "$_COPILOT_TOKEN_CACHE")"
-    printf '%s' "$1" > "$_COPILOT_TOKEN_CACHE"
-    chmod 600 "$_COPILOT_TOKEN_CACHE"
+    linux_secure_cache_write "$_COPILOT_TOKEN_CACHE" "$1"
   fi
 }
 
 _copilot_cache_clear() {
   if [[ "$OSTYPE" == darwin* ]]; then
-    security delete-generic-password \
-      -s "$_COPILOT_KEYCHAIN_SERVICE" -a "$USER" 2>/dev/null || true
+    macos_keychain_clear "$_COPILOT_KEYCHAIN_SERVICE" || true
   else
     rm -f "$_COPILOT_TOKEN_CACHE"
   fi
@@ -1467,11 +1493,11 @@ fetch_copilot() {
   if [[ -n "$premium_pct" || -n "$chat_pct" ]]; then
     local premium_used chat_used
     if [[ -n "$premium_pct" ]]; then
-      premium_used=$(awk "BEGIN{printf \"%.0f\", 100 - $premium_pct}" 2>/dev/null || echo "0")
+      premium_used=$(calculate_used_percent_from_remaining "$premium_pct")
       draw_bar "Premium" "$premium_used"
     fi
     if [[ -n "$chat_pct" ]]; then
-      chat_used=$(awk "BEGIN{printf \"%.0f\", 100 - $chat_pct}" 2>/dev/null || echo "0")
+      chat_used=$(calculate_used_percent_from_remaining "$chat_pct")
       [[ -n "$premium_pct" ]] && printf "\n"
       draw_bar "Chat" "$chat_used"
     fi
