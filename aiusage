@@ -347,13 +347,6 @@ show_cursor() {
   fi
 }
 
-move_to_render_start() {
-  local lines="${1:-0}"
-  ((lines <= 0)) && return 0
-
-  printf "\033[%dF" "$lines"
-}
-
 render_line() {
   printf "\033[2K%s\n" "$1"
 }
@@ -366,13 +359,10 @@ render_spinner_line() {
   printf "\033[2K%b%s%b %b%s%b\n" "$BOLD" "$1" "$RESET" "$DIM" "$2" "$RESET"
 }
 
-clear_extra_render_lines() {
-  local lines="${1:-0}" i
-  ((lines <= 0)) && return 0
-
-  for ((i = 0; i < lines; i++)); do
-    printf "\033[2K\n"
-  done
+render_compact_status_line() {
+  local frame="$1" done_count="$2" total_count="$3"
+  local spin="${SPINNER_FRAMES[$((frame % ${#SPINNER_FRAMES[@]}))]}"
+  printf "\r\033[2K%b%s%b %d/%d providers complete" "$DIM" "$spin" "$RESET" "$done_count" "$total_count"
 }
 
 SECTION_LINES=0
@@ -397,7 +387,6 @@ render_provider_section() {
   SECTION_LINES="$lines"
 }
 
-RENDERED_LINES=0
 WAIT_LABELS=()
 WAIT_PIDS=()
 WAIT_TMPS=()
@@ -415,30 +404,34 @@ render_fetch_state() {
     lines=$((lines + SECTION_LINES))
   done
 
-  RENDERED_LINES="$lines"
 }
 
 wait_and_render_fetches() {
-  local frame=0 prev_lines=0 i done all_done
+  local frame=0 i all_done
+  local done_count=0
+
+  WAIT_DONE=()
+  for ((i = 0; i < ${#WAIT_PIDS[@]}; i++)); do
+    WAIT_DONE+=(0)
+  done
 
   hide_cursor
   while true; do
-    WAIT_DONE=()
     all_done=1
+    done_count=0
     for ((i = 0; i < ${#WAIT_PIDS[@]}; i++)); do
-      done=0
-      kill -0 "${WAIT_PIDS[$i]}" 2>/dev/null || done=1
-      WAIT_DONE+=("$done")
-      ((done)) || all_done=0
+      if ((WAIT_DONE[i] == 0)); then
+        kill -0 "${WAIT_PIDS[$i]}" 2>/dev/null || WAIT_DONE[$i]=1
+      fi
+      if ((WAIT_DONE[i])); then
+        ((done_count++))
+      else
+        all_done=0
+      fi
     done
 
     if [[ -t 1 ]]; then
-      move_to_render_start "$prev_lines"
-      render_fetch_state "$frame"
-      clear_extra_render_lines $((prev_lines - RENDERED_LINES))
-      if ((RENDERED_LINES > prev_lines)); then
-        prev_lines="$RENDERED_LINES"
-      fi
+      render_compact_status_line "$frame" "$done_count" "${#WAIT_LABELS[@]}"
     fi
 
     if ((all_done)); then
@@ -453,13 +446,15 @@ wait_and_render_fetches() {
     wait "$pid" || true
   done
 
-  if [[ ! -t 1 ]]; then
-    WAIT_DONE=()
-    for ((i = 0; i < ${#WAIT_LABELS[@]}; i++)); do
-      WAIT_DONE+=(1)
-    done
-    render_fetch_state "$frame"
+  if [[ -t 1 ]]; then
+    printf "\r\033[2K"
   fi
+
+  WAIT_DONE=()
+  for ((i = 0; i < ${#WAIT_LABELS[@]}; i++)); do
+    WAIT_DONE+=(1)
+  done
+  render_fetch_state "$frame"
 
   show_cursor
 }
@@ -507,10 +502,6 @@ run_fetches_with_loading() {
   WAIT_TMPS=()
   WAIT_DONE=()
   trap - EXIT INT TERM
-}
-
-run_provider_with_loading() {
-  run_fetches_with_loading "$1"
 }
 
 run_named_providers() {
