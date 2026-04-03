@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Run all aiusage tests and report results.
+# Usage: ./tests/run_tests
+set -euo pipefail
+
+dir="$(cd "$(dirname "$0")" && pwd)"
+total_pass=0
+total_fail=0
+total_skip=0
+exit_code=0
+
+printf "Running aiusage test suite...\n\n"
+
+for f in "$dir"/unit/test_*.bash "$dir"/integration/test_*.bash; do
+  [[ -f "$f" ]] || continue
+  name="$(basename "$f")"
+  printf "── %s\n" "$name"
+
+  script_fail=0
+  if output=$(bash "$f" 2>&1); then
+    status=0
+  else
+    status=$?
+    script_fail=1
+  fi
+  printf "%s\n" "$output"
+
+  pass=$(printf "%s\n" "$output" | grep -c "^PASS" || true)
+  fail=$(printf "%s\n" "$output" | grep -c "^FAIL" || true)
+  skip=$(printf "%s\n" "$output" | grep -c "^SKIP" || true)
+
+  if (( script_fail )); then
+    printf "FAIL %s: test script exited with status %d\n" "$name" "$status"
+    exit_code=1
+  fi
+
+  total_pass=$((total_pass + pass))
+  total_fail=$((total_fail + fail + script_fail))
+  total_skip=$((total_skip + skip))
+  printf "\n"
+done
+
+printf "═══════════════════════════════════════════\n"
+printf "Results: %d passed, %d failed" "$total_pass" "$total_fail"
+(( total_skip > 0 )) && printf ", %d skipped" "$total_skip"
+printf "\n\n"
+
+[[ $total_fail -eq 0 ]] || exit_code=1
+exit $exit_code

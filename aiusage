@@ -1573,6 +1573,8 @@ run_from_args() {
   return "$exit_code"
 }
 
-run_from_args "$@"
-
-printf "\n"
+# Only run the CLI entry point when executed directly, not when sourced by tests.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  run_from_args "$@"
+  printf "\n"
+fi
