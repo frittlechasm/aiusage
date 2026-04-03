@@ -50,6 +50,19 @@ Requires `bash`, `curl`, `jq`.
 - Copilot plans with unlimited or org-managed quotas may show only the plan name instead of bars.
 - Provider endpoints and response shapes can change over time.
 
+## Adding providers
+
+1. Add a `fetch_<provider>()` function.
+2. Register it in `run_all_parallel()` and the main argument parser.
+3. Follow the checklist in `TODO.md`.
+
+## Testing
+
+Tests live in `tests/`. Run `./tests/run_tests` after every change.
+
+- `tests/unit/` — helpers and pure functions (calculations, rendering, formatting, caching, CLI args).
+- `tests/integration/` — `fetch_*` provider functions.
+
 > [!WARNING]
 > **Security** — treat this as a local utility with access to existing auth state.
 >
