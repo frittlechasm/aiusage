@@ -3,6 +3,7 @@
 
 # Docs
 - See `README.md` for implementation details and provider notes.
+- See `CONTEXT.md` for project terminology.
 
 # Task Rules:
 - When adding or changing a feature, add or update the corresponding tests.
@@ -12,4 +13,3 @@
 - Single self-contained bash script (`aiusage`).
 - No external dependencies beyond `bash`, `curl`, and `jq`. Keep it that way.
 - Must run correctly on both macOS and Linux.
-

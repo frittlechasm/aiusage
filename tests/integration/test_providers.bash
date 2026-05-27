@@ -72,6 +72,43 @@ assert_contains "$out" "45%"    "fetch_codex 200: shows 45%"
 assert_contains "$out" "Weekly" "fetch_codex 200: shows weekly bar"
 assert_contains "$out" "20%"    "fetch_codex 200: shows 20%"
 
+# HTTP 200 with optional Spark limits and account credits
+_tmp=$(make_tmp_home)
+mkdir -p "$_tmp/.codex"
+printf '{"tokens":{"access_token":"fake","account_id":"fake-id"}}' > "$_tmp/.codex/auth.json"
+set_http_response "200" '{"rate_limit":{"primary_window":{"used_percent":"45.0","reset_at":"2026-03-28T12:00:00Z"},"secondary_window":{"used_percent":"20.0","reset_at":"2026-04-04T00:00:00Z"}},"additional_rate_limits":[{"limit_name":"GPT-5.3-Codex-Spark","metered_feature":"codex_spark","rate_limit":{"primary_window":{"used_percent":"15.0","reset_at":"2026-03-28T13:00:00Z"},"secondary_window":{"used_percent":"5.0","reset_at":"2026-04-05T00:00:00Z"}}}],"credits":{"has_credits":true,"balance":"12","unlimited":false}}'
+HOME="$_tmp"
+out=$(fetch_codex 2>&1) || true
+HOME="$_ORIG_HOME"; cleanup_tmp_home
+assert_contains "$out" "Spark 5h" "fetch_codex 200: shows optional Spark 5h bar"
+assert_contains "$out" "15%"      "fetch_codex 200: shows Spark 5h usage"
+assert_contains "$out" "Spark Wk" "fetch_codex 200: shows optional Spark weekly bar"
+assert_contains "$out" "5%"       "fetch_codex 200: shows Spark weekly usage"
+assert_contains "$out" "Extra"    "fetch_codex 200: shows optional extra credits"
+assert_contains "$out" "12 credits available" "fetch_codex 200: shows credit balance"
+
+# HTTP 200 with assigned but exhausted account credits
+_tmp=$(make_tmp_home)
+mkdir -p "$_tmp/.codex"
+printf '{"tokens":{"access_token":"fake","account_id":"fake-id"}}' > "$_tmp/.codex/auth.json"
+set_http_response "200" '{"rate_limit":{"primary_window":{"used_percent":"45.0"},"secondary_window":{"used_percent":"20.0"}},"credits":{"has_credits":true,"balance":"0","unlimited":false}}'
+HOME="$_tmp"
+out=$(fetch_codex 2>&1) || true
+HOME="$_ORIG_HOME"; cleanup_tmp_home
+assert_contains "$out" "Extra" "fetch_codex 200: shows assigned extra credits with zero balance"
+assert_contains "$out" "0 credits available" "fetch_codex 200: shows exhausted credit balance"
+
+# HTTP 200 with Spark resets identical to primary resets keeps secondary section compact
+_tmp=$(make_tmp_home)
+mkdir -p "$_tmp/.codex"
+printf '{"tokens":{"access_token":"fake","account_id":"fake-id"}}' > "$_tmp/.codex/auth.json"
+set_http_response "200" '{"rate_limit":{"primary_window":{"used_percent":"45.0","reset_at":"2026-03-28T12:00:00Z"},"secondary_window":{"used_percent":"20.0","reset_at":"2026-04-04T00:00:00Z"}},"additional_rate_limits":[{"limit_name":"GPT-5.3-Codex-Spark","rate_limit":{"primary_window":{"used_percent":"15.0","reset_at":"2026-03-28T12:00:00Z"},"secondary_window":{"used_percent":"5.0","reset_at":"2026-04-04T00:00:00Z"}}}]}'
+HOME="$_tmp"
+out=$(fetch_codex 2>&1) || true
+HOME="$_ORIG_HOME"; cleanup_tmp_home
+reset_count=$(printf '%s\n' "$out" | awk '/reset:/ { count++ } END { print count + 0 }')
+assert_eq "2" "$reset_count" "fetch_codex 200: suppresses duplicate Spark reset lines"
+
 # HTTP 401
 _tmp=$(make_tmp_home)
 mkdir -p "$_tmp/.codex"

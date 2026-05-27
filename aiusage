@@ -69,6 +69,11 @@ draw_credits_line() {
   printf "  %-8s ${DIM}\$%s / \$%s${RESET}\n" "" "$used_fmt" "$limit_fmt"
 }
 
+draw_credit_balance_line() {
+  local label="$1" balance="$2"
+  printf "  %-8s ${DIM}%s credits available${RESET}\n" "$label" "$balance"
+}
+
 calculate_percent() {
   local used="${1:-0}" limit="${2:-0}" fallback="${3:-0}"
   awk "BEGIN{l=$limit; if (l > 0) printf \"%.0f\", ($used / l) * 100; else print $fallback}" 2>/dev/null || echo "$fallback"
@@ -737,6 +742,58 @@ fetch_codex() {
     draw_unavailable "Weekly"
   fi
   draw_reset "$secondary_reset_epoch"
+
+  local spark_primary spark_secondary spark_primary_reset spark_secondary_reset
+  IFS=$'\t' read -r spark_primary spark_secondary spark_primary_reset spark_secondary_reset < <(
+    printf '%s' "$resp" | jq -r 'def first_reset(w): w.reset_at // w.resets_at // w.resetAt // w.resetsAt // w.window_end // w.window_end_at // w.windowEnd // w.windowEndAt;
+      ((.additional_rate_limits // [])
+       | map(select(((.limit_name // "") + " " + (.metered_feature // "")) | test("spark"; "i")))
+       | first) as $spark
+      | [($spark.rate_limit.primary_window.used_percent // ""),
+         ($spark.rate_limit.secondary_window.used_percent // ""),
+         (first_reset($spark.rate_limit.primary_window) // ""),
+         (first_reset($spark.rate_limit.secondary_window) // "")] | @tsv' 2>/dev/null
+  )
+
+  if [[ -n "$spark_primary" || -n "$spark_secondary" ]]; then
+    local spark_primary_reset_epoch spark_secondary_reset_epoch
+    spark_primary_reset_epoch=$(normalize_epoch "$spark_primary_reset")
+    spark_secondary_reset_epoch=$(normalize_epoch "$spark_secondary_reset")
+
+    printf "\n"
+    if [[ -n "$spark_primary" ]]; then
+      draw_bar "Spark 5h" "$spark_primary"
+    else
+      draw_unavailable "Spark 5h"
+    fi
+    if [[ -n "$spark_primary_reset_epoch" && "$spark_primary_reset_epoch" != "$primary_reset_epoch" ]]; then
+      draw_reset "$spark_primary_reset_epoch" "time"
+    fi
+
+    if [[ -n "$spark_secondary" ]]; then
+      draw_bar "Spark Wk" "$spark_secondary"
+    else
+      draw_unavailable "Spark Wk"
+    fi
+    if [[ -n "$spark_secondary_reset_epoch" && "$spark_secondary_reset_epoch" != "$secondary_reset_epoch" ]]; then
+      draw_reset "$spark_secondary_reset_epoch"
+    fi
+  fi
+
+  local has_credits credit_balance credits_unlimited
+  IFS=$'\t' read -r has_credits credit_balance credits_unlimited < <(
+    printf '%s' "$resp" | jq -r '[((.credits.has_credits // false) | tostring),
+      (.credits.balance // ""),
+      ((.credits.unlimited // false) | tostring)] | @tsv' 2>/dev/null
+  )
+
+  if [[ "$credits_unlimited" == "true" ]]; then
+    printf "\n"
+    draw_credit_balance_line "Extra" "unlimited"
+  elif [[ "$has_credits" == "true" && -n "$credit_balance" && "$credit_balance" != "null" ]]; then
+    printf "\n"
+    draw_credit_balance_line "Extra" "$credit_balance"
+  fi
 }
 
 # ── cursor ──────────────────────────────────────────────
