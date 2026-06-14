@@ -13,11 +13,26 @@ _AI subscription usage in your terminal._
 
 ## Install
 
+macOS, Linux, WSL:
+
 ```bash
-chmod +x ./aiusage
+curl -fsSL https://raw.githubusercontent.com/frittlechasm/aiusage/main/install.sh | sh
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/frittlechasm/aiusage/main/install.ps1 | iex
 ```
 
 Requires `bash`, `curl`, `jq`.
+
+By default this installs to `~/.local/bin` on macOS/Linux/WSL and
+`%LOCALAPPDATA%\Programs\aiusage\bin` on Windows. To choose a directory:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/frittlechasm/aiusage/main/install.sh | sh -s -- --dir "$HOME/bin"
+```
 
 ## Usage
 
