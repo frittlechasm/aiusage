@@ -2,6 +2,7 @@
 set -euo pipefail
 
 # ── config ──────────────────────────────────────────────
+VERSION="0.1.1"
 BAR_WIDTH=20
 FILL="█"
 EMPTY="░"
@@ -1572,6 +1573,7 @@ fetch_copilot() {
 usage() {
   cat <<'EOF'
 Usage: aiusage [provider ...]
+       aiusage --version
 
 Providers:
   claude    Show Claude usage
@@ -1599,6 +1601,10 @@ run_from_args() {
     case "$arg" in
     -h | --help | help)
       usage
+      return
+      ;;
+    --version)
+      printf "aiusage %s\n" "$VERSION"
       return
       ;;
     all)

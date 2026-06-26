@@ -41,6 +41,7 @@ curl -fsSL https://raw.githubusercontent.com/frittlechasm/aiusage/main/install.s
 ./aiusage claude                  # Claude only
 ./aiusage cursor claude           # Cursor + Claude
 ./aiusage codex gemini copilot    # any subset, in the order you want
+./aiusage --version               # print the installed version
 ```
 
 ## How it works
