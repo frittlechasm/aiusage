@@ -69,7 +69,6 @@ curl -fsSL https://raw.githubusercontent.com/frittlechasm/aiusage/main/install.s
 
 1. Add a `fetch_<provider>()` function.
 2. Register it in `run_all_parallel()` and the main argument parser.
-3. Follow the checklist in `TODO.md`.
 
 ## Testing
 
