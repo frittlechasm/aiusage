@@ -48,6 +48,86 @@ path_has_dir() {
   esac
 }
 
+required_dependency_install_hint() {
+  if [ "$(uname -s 2>/dev/null || true)" = "Darwin" ]; then
+    cat <<'EOF'
+Install missing dependencies with:
+  brew install curl jq
+EOF
+    return 0
+  fi
+
+  if [ -r /etc/os-release ]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    case "${ID:-}" in
+      debian | ubuntu | linuxmint | pop)
+        cat <<'EOF'
+Install missing dependencies with:
+  sudo apt-get update && sudo apt-get install -y curl jq
+EOF
+        return 0
+        ;;
+      fedora)
+        cat <<'EOF'
+Install missing dependencies with:
+  sudo dnf install curl jq
+EOF
+        return 0
+        ;;
+      rhel | centos | rocky | almalinux)
+        cat <<'EOF'
+Install missing dependencies with:
+  sudo dnf install curl jq
+EOF
+        return 0
+        ;;
+      arch | manjaro)
+        cat <<'EOF'
+Install missing dependencies with:
+  sudo pacman -S curl jq
+EOF
+        return 0
+        ;;
+      opensuse* | suse)
+        cat <<'EOF'
+Install missing dependencies with:
+  sudo zypper install curl jq
+EOF
+        return 0
+        ;;
+    esac
+  fi
+
+  cat <<'EOF'
+Install missing dependencies with your OS package manager:
+  curl jq
+EOF
+}
+
+check_required_dependencies() {
+  missing=""
+
+  for dep in curl jq; do
+    if ! command -v "$dep" >/dev/null 2>&1; then
+      if [ -n "$missing" ]; then
+        missing="$missing $dep"
+      else
+        missing="$dep"
+      fi
+    fi
+  done
+
+  [ -z "$missing" ] && return 0
+
+  case "$missing" in
+    *" "*) printf "aiusage install: missing required dependencies: %s\n\n" "$missing" >&2 ;;
+    *) printf "aiusage install: missing required dependency: %s\n\n" "$missing" >&2 ;;
+  esac
+  required_dependency_install_hint >&2
+  return 1
+}
+
 copy_source() {
   source_path="$1"
   dest_path="$2"
@@ -147,6 +227,8 @@ if [ -z "$install_dir" ]; then
   printf "aiusage install: install directory is empty\n" >&2
   exit 1
 fi
+
+check_required_dependencies
 
 mkdir -p "$install_dir"
 dest="$install_dir/aiusage"
