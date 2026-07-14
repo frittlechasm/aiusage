@@ -46,6 +46,18 @@ assert_eq "Credits" "$(duration_to_label 'P1M')"    "duration_to_label: P1M → 
 assert_eq "Credits" "$(duration_to_label '')"       "duration_to_label: empty → Credits"
 assert_eq "Credits" "$(duration_to_label 'UNKNOWN')" "duration_to_label: unknown → Credits"
 
+# ── codex_window_label ────────────────────────────────────
+
+assert_eq "5h"     "$(codex_window_label '18000' 'fallback')"  "codex_window_label: five hours"
+assert_eq "Weekly" "$(codex_window_label '604800' 'fallback')" "codex_window_label: seven days → Weekly"
+assert_eq "2d"     "$(codex_window_label '172800' 'fallback')" "codex_window_label: other whole days"
+assert_eq "90m"    "$(codex_window_label '5400' 'fallback')"   "codex_window_label: partial hours → minutes"
+assert_eq "5h"     "$(codex_window_label '' '5h')"             "codex_window_label: missing duration uses fallback"
+assert_eq "Spark Wk" "$(codex_spark_window_label 'Weekly')"    "codex_spark_window_label: compact weekly label"
+assert_eq "time"     "$(codex_window_reset_mode '18000')"      "codex_window_reset_mode: short window uses time"
+assert_eq "datetime" "$(codex_window_reset_mode '604800')"     "codex_window_reset_mode: weekly window uses date and time"
+assert_eq "time"     "$(codex_window_reset_mode '' 'time')"    "codex_window_reset_mode: missing duration uses fallback"
+
 # ── normalize_epoch (numeric inputs — ISO parsing is platform-dependent) ──
 
 assert_eq "1748000000" "$(normalize_epoch '1748000000')"     "normalize_epoch: plain epoch"

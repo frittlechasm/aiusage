@@ -56,7 +56,7 @@ curl -fsSL https://raw.githubusercontent.com/frittlechasm/aiusage/main/install.s
 | Provider | What it shows | Auth source |
 |----------|--------------|-------------|
 | Claude | `5h` and `Weekly` usage bars, extra credit usage | `claude` login credentials |
-| Codex | `5h` and `Weekly` usage bars, optional Spark limits and extra credits | `~/.codex/auth.json` |
+| Codex | Available usage windows (for example `5h` or `Weekly`), optional Spark limits and extra credits | `~/.codex/auth.json` |
 | Cursor | Monthly credit or request usage | Browser cookies or `CURSOR_COOKIE` |
 | Gemini | Quota usage for Google OAuth / Code Assist | `gemini` login credentials |
 | JetBrains | AI credit usage from local IDE quota state | `AIAssistantQuotaManager2.xml` |

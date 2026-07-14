@@ -367,6 +367,43 @@ duration_to_label() {
   printf "Credits"
 }
 
+codex_window_label() {
+  local seconds="${1:-}" fallback="${2:-}"
+
+  if [[ "$seconds" =~ ^[0-9]+$ ]] && ((seconds > 0)); then
+    if ((seconds == 604800)); then
+      printf "Weekly"
+    elif ((seconds % 86400 == 0)); then
+      printf "%sd" "$((seconds / 86400))"
+    elif ((seconds % 3600 == 0)); then
+      printf "%sh" "$((seconds / 3600))"
+    else
+      printf "%sm" "$((seconds / 60))"
+    fi
+    return 0
+  fi
+
+  printf "%s" "$fallback"
+}
+
+codex_spark_window_label() {
+  local label="$1"
+  if [[ "$label" == "Weekly" ]]; then
+    printf "Spark Wk"
+  else
+    printf "Spark %s" "$label"
+  fi
+}
+
+codex_window_reset_mode() {
+  local seconds="${1:-}" fallback="${2:-datetime}"
+  if [[ "$seconds" =~ ^[0-9]+$ ]]; then
+    ((seconds < 86400)) && printf "time" || printf "datetime"
+  else
+    printf "%s" "$fallback"
+  fi
+}
+
 normalize_epoch() {
   local raw="${1:-}"
   [[ -z "$raw" || "$raw" == "null" ]] && return 0
@@ -791,43 +828,51 @@ fetch_codex() {
     return
   fi
 
-  local primary secondary primary_reset secondary_reset
-  IFS=$'\t' read -r primary secondary primary_reset secondary_reset < <(
+  local primary primary_seconds primary_reset secondary secondary_seconds secondary_reset
+  IFS=$'\037' read -r primary primary_seconds primary_reset secondary secondary_seconds secondary_reset < <(
     printf '%s' "$resp" | jq -r 'def first_reset(w): w.reset_at // w.resets_at // w.resetAt // w.resetsAt // w.window_end // w.window_end_at // w.windowEnd // w.windowEndAt;
       [(.rate_limit.primary_window.used_percent // ""),
-       (.rate_limit.secondary_window.used_percent // ""),
+       (.rate_limit.primary_window.limit_window_seconds // ""),
        (first_reset(.rate_limit.primary_window) // ""),
-       (first_reset(.rate_limit.secondary_window) // "")] | @tsv' 2>/dev/null
+       (.rate_limit.secondary_window.used_percent // ""),
+       (.rate_limit.secondary_window.limit_window_seconds // ""),
+       (first_reset(.rate_limit.secondary_window) // "")] | map(tostring) | join("\u001f")' 2>/dev/null
   )
 
   local primary_reset_epoch secondary_reset_epoch
   primary_reset_epoch=$(normalize_epoch "$primary_reset")
   secondary_reset_epoch=$(normalize_epoch "$secondary_reset")
 
+  local primary_label secondary_label
+  primary_label=$(codex_window_label "$primary_seconds" "5h")
+  secondary_label=$(codex_window_label "$secondary_seconds" "Weekly")
+
   if [[ -n "$primary" ]]; then
-    draw_bar "5h" "$primary"
-  else
-    draw_unavailable "5h"
+    draw_bar "$primary_label" "$primary"
+    draw_reset "$primary_reset_epoch" "$(codex_window_reset_mode "$primary_seconds" "time")"
   fi
-  draw_reset "$primary_reset_epoch" "time"
 
   if [[ -n "$secondary" ]]; then
-    draw_bar "Weekly" "$secondary"
-  else
-    draw_unavailable "Weekly"
+    draw_bar "$secondary_label" "$secondary"
+    draw_reset "$secondary_reset_epoch" "$(codex_window_reset_mode "$secondary_seconds" "datetime")"
   fi
-  draw_reset "$secondary_reset_epoch"
 
-  local spark_primary spark_secondary spark_primary_reset spark_secondary_reset
-  IFS=$'\t' read -r spark_primary spark_secondary spark_primary_reset spark_secondary_reset < <(
+  if [[ -z "$primary" && -z "$secondary" ]]; then
+    draw_unavailable "Usage"
+  fi
+
+  local spark_primary spark_primary_seconds spark_primary_reset spark_secondary spark_secondary_seconds spark_secondary_reset
+  IFS=$'\037' read -r spark_primary spark_primary_seconds spark_primary_reset spark_secondary spark_secondary_seconds spark_secondary_reset < <(
     printf '%s' "$resp" | jq -r 'def first_reset(w): w.reset_at // w.resets_at // w.resetAt // w.resetsAt // w.window_end // w.window_end_at // w.windowEnd // w.windowEndAt;
       ((.additional_rate_limits // [])
        | map(select(((.limit_name // "") + " " + (.metered_feature // "")) | test("spark"; "i")))
        | first) as $spark
       | [($spark.rate_limit.primary_window.used_percent // ""),
-         ($spark.rate_limit.secondary_window.used_percent // ""),
+         ($spark.rate_limit.primary_window.limit_window_seconds // ""),
          (first_reset($spark.rate_limit.primary_window) // ""),
-         (first_reset($spark.rate_limit.secondary_window) // "")] | @tsv' 2>/dev/null
+         ($spark.rate_limit.secondary_window.used_percent // ""),
+         ($spark.rate_limit.secondary_window.limit_window_seconds // ""),
+         (first_reset($spark.rate_limit.secondary_window) // "")] | map(tostring) | join("\u001f")' 2>/dev/null
   )
 
   if [[ -n "$spark_primary" || -n "$spark_secondary" ]]; then
@@ -837,21 +882,21 @@ fetch_codex() {
 
     printf "\n"
     if [[ -n "$spark_primary" ]]; then
-      draw_bar "Spark 5h" "$spark_primary"
-    else
-      draw_unavailable "Spark 5h"
-    fi
-    if [[ -n "$spark_primary_reset_epoch" && "$spark_primary_reset_epoch" != "$primary_reset_epoch" ]]; then
-      draw_reset "$spark_primary_reset_epoch" "time"
+      local spark_primary_label
+      spark_primary_label=$(codex_spark_window_label "$(codex_window_label "$spark_primary_seconds" "5h")")
+      draw_bar "$spark_primary_label" "$spark_primary"
+      if [[ -n "$spark_primary_reset_epoch" && "$spark_primary_reset_epoch" != "$primary_reset_epoch" ]]; then
+        draw_reset "$spark_primary_reset_epoch" "$(codex_window_reset_mode "$spark_primary_seconds" "time")"
+      fi
     fi
 
     if [[ -n "$spark_secondary" ]]; then
-      draw_bar "Spark Wk" "$spark_secondary"
-    else
-      draw_unavailable "Spark Wk"
-    fi
-    if [[ -n "$spark_secondary_reset_epoch" && "$spark_secondary_reset_epoch" != "$secondary_reset_epoch" ]]; then
-      draw_reset "$spark_secondary_reset_epoch"
+      local spark_secondary_label
+      spark_secondary_label=$(codex_spark_window_label "$(codex_window_label "$spark_secondary_seconds" "Weekly")")
+      draw_bar "$spark_secondary_label" "$spark_secondary"
+      if [[ -n "$spark_secondary_reset_epoch" && "$spark_secondary_reset_epoch" != "$secondary_reset_epoch" ]]; then
+        draw_reset "$spark_secondary_reset_epoch" "$(codex_window_reset_mode "$spark_secondary_seconds" "datetime")"
+      fi
     fi
   fi
 

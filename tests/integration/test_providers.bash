@@ -72,6 +72,22 @@ assert_contains "$out" "45%"    "fetch_codex 200: shows 45%"
 assert_contains "$out" "Weekly" "fetch_codex 200: shows weekly bar"
 assert_contains "$out" "20%"    "fetch_codex 200: shows 20%"
 
+# HTTP 200 with the temporary weekly-only response shape
+_tmp=$(make_tmp_home)
+mkdir -p "$_tmp/.codex"
+printf '{"tokens":{"access_token":"fake","account_id":"fake-id"}}' > "$_tmp/.codex/auth.json"
+set_http_response "200" '{"rate_limit":{"primary_window":{"used_percent":4,"limit_window_seconds":604800,"reset_at":1784524085},"secondary_window":null},"additional_rate_limits":[{"limit_name":"GPT-5.3-Codex-Spark","metered_feature":"codex_bengalfox","rate_limit":{"primary_window":{"used_percent":0,"limit_window_seconds":604800,"reset_at":1784601644},"secondary_window":null}}]}'
+HOME="$_tmp"
+out=$(fetch_codex 2>&1) || true
+HOME="$_ORIG_HOME"; cleanup_tmp_home
+assert_contains "$out" "Weekly"  "fetch_codex weekly-only: labels the primary window from its duration"
+assert_contains "$out" "4%"      "fetch_codex weekly-only: shows weekly usage"
+assert_not_contains "$out" "  5h" "fetch_codex weekly-only: omits the absent 5h window"
+assert_not_contains "$out" "100%" "fetch_codex weekly-only: does not parse reset timestamps as usage"
+assert_contains "$out" "Spark Wk" "fetch_codex weekly-only: labels the Spark weekly window"
+assert_not_contains "$out" "Spark 5h" "fetch_codex weekly-only: omits the absent Spark 5h window"
+assert_not_contains "$out" "reset: --" "fetch_codex weekly-only: preserves reset timestamps after empty fields"
+
 # HTTP 200 with optional Spark limits and account credits
 _tmp=$(make_tmp_home)
 mkdir -p "$_tmp/.codex"
