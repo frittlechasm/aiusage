@@ -780,6 +780,28 @@ fetch_claude() {
   fi
   draw_reset "$seven_day_reset_epoch"
 
+  local fable fable_reset
+  IFS=$'\037' read -r fable fable_reset < <(
+    printf '%s' "$resp" | jq -r '
+      (first(
+        (.limits // [] | if type == "array" then . else [] end)[]?
+        | objects
+        | select(.kind == "weekly_scoped")
+        | select(try (
+            (.scope.model.display_name // "")
+            | tostring
+            | test("^(claude )?fable($| )"; "i")
+          ) catch false)
+      )) as $fable
+      | [($fable.percent // ""),
+         ($fable.resets_at // "")] | map(tostring) | join("\u001f")' 2>/dev/null
+  ) || true
+
+  if [[ -n "$fable" ]]; then
+    draw_bar "Fable" "$fable"
+    draw_reset "$(normalize_epoch "$fable_reset")"
+  fi
+
   local extra_enabled extra_util extra_used extra_limit
   IFS=$'\t' read -r extra_enabled extra_util extra_used extra_limit < <(
     printf '%s' "$resp" | jq -r '[(.extra_usage.is_enabled // false | tostring),

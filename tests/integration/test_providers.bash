@@ -29,6 +29,37 @@ assert_contains "$out" "5h"     "fetch_claude 200: shows 5h bar"
 assert_contains "$out" "50%"    "fetch_claude 200: shows 50% utilization"
 assert_contains "$out" "Weekly" "fetch_claude 200: shows weekly bar"
 assert_contains "$out" "30%"    "fetch_claude 200: shows 30% utilization"
+assert_not_contains "$out" "Fable" "fetch_claude 200: omits unavailable Fable limit"
+
+# HTTP 200: current limits array without a Fable allowance
+_tmp=$(make_tmp_home)
+mkdir -p "$_tmp/.claude"
+printf '{"claudeAiOauth":{"accessToken":"fake-token"}}' > "$_tmp/.claude/.credentials.json"
+set_http_response "200" '{"five_hour":{"utilization":"50.0"},"seven_day":{"utilization":"30.0"},"limits":[{"kind":"session","group":"session","percent":50,"scope":null},{"kind":"weekly_all","group":"weekly","percent":30,"scope":null}]}'
+HOME="$_tmp"
+out=$(fetch_claude 2>&1) || true
+HOME="$_ORIG_HOME"; cleanup_tmp_home
+assert_not_contains "$out" "Fable" "fetch_claude 200: ignores unscoped current limits"
+
+# HTTP 200: optional Fable weekly limit in the scoped limits array
+_tmp=$(make_tmp_home)
+mkdir -p "$_tmp/.claude"
+printf '{"claudeAiOauth":{"accessToken":"fake-token"}}' > "$_tmp/.claude/.credentials.json"
+set_http_response "200" '{"five_hour":{"utilization":"50.0","resets_at":"2026-07-25T12:00:00Z"},"seven_day":{"utilization":"30.0","resets_at":"2026-07-30T00:00:00Z"},"limits":[{"kind":"session","group":"session","percent":50,"resets_at":"2026-07-25T12:00:00Z","scope":"unexpected"},{"kind":"weekly_all","group":"weekly","percent":30,"resets_at":"2026-07-30T00:00:00Z","scope":null},{"kind":"weekly_scoped","group":"weekly","percent":17,"resets_at":"2026-07-30T00:00:00Z","scope":{"model":{"id":null,"display_name":"Fable"},"surface":null}}]}'
+HOME="$_tmp"
+out=$(fetch_claude 2>&1) || true
+assert_contains "$out" "Fable" "fetch_claude 200: shows optional Fable bar"
+assert_contains "$out" "17%"   "fetch_claude 200: shows Fable usage"
+reset_count=$(printf '%s\n' "$out" | awk '/reset:/ { count++ } END { print count + 0 }')
+assert_eq "3" "$reset_count" "fetch_claude 200: shows the Fable reset"
+assert_not_contains "$out" "reset: --" "fetch_claude 200: parses the Fable reset"
+
+# A present Fable allowance remains visible when none of it has been used
+set_http_response "200" '{"five_hour":{"utilization":"50.0"},"seven_day":{"utilization":"30.0"},"limits":[{"kind":"weekly_scoped","group":"weekly","percent":0,"resets_at":"2026-07-30T00:00:00Z","scope":{"model":{"display_name":"Claude Fable 5"}}}]}'
+out=$(fetch_claude 2>&1) || true
+HOME="$_ORIG_HOME"; cleanup_tmp_home
+fable_line=$(printf '%s\n' "$out" | awk '$1 == "Fable"')
+assert_contains "$fable_line" "0%" "fetch_claude 200: shows zero Fable usage"
 
 # HTTP 401: session expired
 _tmp=$(make_tmp_home)
