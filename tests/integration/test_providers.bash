@@ -102,6 +102,41 @@ assert_contains "$out" "5h"     "fetch_codex 200: shows 5h bar"
 assert_contains "$out" "45%"    "fetch_codex 200: shows 45%"
 assert_contains "$out" "Weekly" "fetch_codex 200: shows weekly bar"
 assert_contains "$out" "20%"    "fetch_codex 200: shows 20%"
+assert_not_contains "$out" " resets" "fetch_codex 200: omits unavailable banked reset data"
+
+# HTTP 200 with banked reset inventory; applicable count is zero until a limit is reached.
+_tmp=$(make_tmp_home)
+mkdir -p "$_tmp/.codex"
+printf '{"tokens":{"access_token":"fake","account_id":"fake-id"}}' > "$_tmp/.codex/auth.json"
+set_http_response "200" '{"rate_limit":{"primary_window":{"used_percent":"45.0"},"secondary_window":{"used_percent":"20.0"}},"rate_limit_reset_credits":{"available_count":3,"applicable_available_count":0}}'
+HOME="$_tmp"
+out=$(fetch_codex 2>&1) || true
+HOME="$_ORIG_HOME"; cleanup_tmp_home
+assert_contains "$out" "· 3 resets" "fetch_codex banked resets: shows available inventory"
+assert_not_contains "$out" "· 0 resets" "fetch_codex banked resets: ignores gated applicable count"
+banked_count=$(printf '%s\n' "$out" | awk '/· 3 resets/ { count++ } END { print count + 0 }')
+assert_eq "1" "$banked_count" "fetch_codex banked resets: shows inventory once"
+
+# A single banked reset uses the singular label.
+_tmp=$(make_tmp_home)
+mkdir -p "$_tmp/.codex"
+printf '{"tokens":{"access_token":"fake","account_id":"fake-id"}}' > "$_tmp/.codex/auth.json"
+set_http_response "200" '{"rate_limit":{"primary_window":{"used_percent":"45.0"}},"rate_limit_reset_credits":{"available_count":1,"applicable_available_count":0}}'
+HOME="$_tmp"
+out=$(fetch_codex 2>&1) || true
+HOME="$_ORIG_HOME"; cleanup_tmp_home
+assert_contains "$out" "· 1 reset" "fetch_codex banked resets: uses singular label"
+assert_not_contains "$out" "· 1 resets" "fetch_codex banked resets: avoids plural for one"
+
+# An explicit zero remains visible instead of being treated as missing.
+_tmp=$(make_tmp_home)
+mkdir -p "$_tmp/.codex"
+printf '{"tokens":{"access_token":"fake","account_id":"fake-id"}}' > "$_tmp/.codex/auth.json"
+set_http_response "200" '{"rate_limit":{"primary_window":{"used_percent":"45.0"}},"rate_limit_reset_credits":{"available_count":0,"applicable_available_count":0}}'
+HOME="$_tmp"
+out=$(fetch_codex 2>&1) || true
+HOME="$_ORIG_HOME"; cleanup_tmp_home
+assert_contains "$out" "· 0 resets" "fetch_codex banked resets: shows explicit zero inventory"
 
 # HTTP 200 with the temporary weekly-only response shape
 _tmp=$(make_tmp_home)

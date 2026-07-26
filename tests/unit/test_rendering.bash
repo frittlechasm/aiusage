@@ -42,6 +42,11 @@ assert_contains "$out" "72%"                    "draw_bar: decimal percent trunc
 out=$(draw_bar "Extra" "0.5")
 assert_contains "$out" "0%"                     "draw_bar: fractional under 1% truncated to 0"
 
+# Optional notes stay on the bar line.
+out=$(draw_bar "Weekly" 30 "3 resets")
+assert_contains "$out" "· 3 resets"             "draw_bar: shows an inline note"
+assert_eq "1" "$(printf '%s\n' "$out" | awk 'END { print NR }')" "draw_bar: inline note adds no rows"
+
 # ── draw_unavailable ──────────────────────────────────────
 
 out=$(draw_unavailable "Weekly")
@@ -52,6 +57,9 @@ assert_not_contains "$out" "█"                  "draw_unavailable: no filled c
 
 out=$(draw_unavailable "5h")
 assert_contains "$out" "5h"                     "draw_unavailable: shows different label"
+
+out=$(draw_unavailable "Usage" "0 resets")
+assert_contains "$out" "· 0 resets"             "draw_unavailable: shows an inline note"
 
 # ── draw_error ────────────────────────────────────────────
 

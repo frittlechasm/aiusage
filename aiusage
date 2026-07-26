@@ -101,7 +101,7 @@ check_required_dependencies() {
 }
 
 draw_bar() {
-  local label="$1" percent="$2"
+  local label="$1" percent="$2" note="${3:-}"
   percent="${percent%.*}"
   [[ -z "$percent" ]] && percent=0
   ((percent < 0)) && percent=0
@@ -121,15 +121,23 @@ draw_bar() {
   for ((i = 0; i < empty; i++)); do bar+="$EMPTY"; done
   bar+="${RESET}"
 
-  printf "  %-*s %b %3d%%\n" "$LABEL_WIDTH" "$label" "$bar" "$percent"
+  if [[ -n "$note" ]]; then
+    printf "  %-*s %b %3d%% ${DIM}· %s${RESET}\n" "$LABEL_WIDTH" "$label" "$bar" "$percent" "$note"
+  else
+    printf "  %-*s %b %3d%%\n" "$LABEL_WIDTH" "$label" "$bar" "$percent"
+  fi
 }
 
 draw_unavailable() {
-  local label="$1"
+  local label="$1" note="${2:-}"
   local bar="${DIM}"
   for ((i = 0; i < BAR_WIDTH; i++)); do bar+="$EMPTY"; done
   bar+="${RESET}"
-  printf "  %-*s %b  --%%\n" "$LABEL_WIDTH" "$label" "$bar"
+  if [[ -n "$note" ]]; then
+    printf "  %-*s %b  --%% ${DIM}· %s${RESET}\n" "$LABEL_WIDTH" "$label" "$bar" "$note"
+  else
+    printf "  %-*s %b  --%%\n" "$LABEL_WIDTH" "$label" "$bar"
+  fi
 }
 
 draw_error() {
@@ -851,15 +859,16 @@ fetch_codex() {
     return
   fi
 
-  local primary primary_seconds primary_reset secondary secondary_seconds secondary_reset
-  IFS=$'\037' read -r primary primary_seconds primary_reset secondary secondary_seconds secondary_reset < <(
+  local primary primary_seconds primary_reset secondary secondary_seconds secondary_reset banked_resets
+  IFS=$'\037' read -r primary primary_seconds primary_reset secondary secondary_seconds secondary_reset banked_resets < <(
     printf '%s' "$resp" | jq -r 'def first_reset(w): w.reset_at // w.resets_at // w.resetAt // w.resetsAt // w.window_end // w.window_end_at // w.windowEnd // w.windowEndAt;
       [(.rate_limit.primary_window.used_percent // ""),
        (.rate_limit.primary_window.limit_window_seconds // ""),
        (first_reset(.rate_limit.primary_window) // ""),
        (.rate_limit.secondary_window.used_percent // ""),
        (.rate_limit.secondary_window.limit_window_seconds // ""),
-       (first_reset(.rate_limit.secondary_window) // "")] | map(tostring) | join("\u001f")' 2>/dev/null
+       (first_reset(.rate_limit.secondary_window) // ""),
+       (.rate_limit_reset_credits.available_count // "")] | map(tostring) | join("\u001f")' 2>/dev/null
   )
 
   local primary_reset_epoch secondary_reset_epoch
@@ -870,18 +879,29 @@ fetch_codex() {
   primary_label=$(codex_window_label "$primary_seconds" "5h")
   secondary_label=$(codex_window_label "$secondary_seconds" "Weekly")
 
+  local banked_resets_note=""
+  if [[ "$banked_resets" =~ ^[0-9]+$ ]]; then
+    if [[ "$banked_resets" == "1" ]]; then
+      banked_resets_note="1 reset"
+    else
+      banked_resets_note="$banked_resets resets"
+    fi
+  fi
+
   if [[ -n "$primary" ]]; then
-    draw_bar "$primary_label" "$primary"
+    draw_bar "$primary_label" "$primary" "$banked_resets_note"
+    banked_resets_note=""
     draw_reset "$primary_reset_epoch" "$(codex_window_reset_mode "$primary_seconds" "time")"
   fi
 
   if [[ -n "$secondary" ]]; then
-    draw_bar "$secondary_label" "$secondary"
+    draw_bar "$secondary_label" "$secondary" "$banked_resets_note"
+    banked_resets_note=""
     draw_reset "$secondary_reset_epoch" "$(codex_window_reset_mode "$secondary_seconds" "datetime")"
   fi
 
   if [[ -z "$primary" && -z "$secondary" ]]; then
-    draw_unavailable "Usage"
+    draw_unavailable "Usage" "$banked_resets_note"
   fi
 
   local spark_primary spark_primary_seconds spark_primary_reset spark_secondary spark_secondary_seconds spark_secondary_reset
