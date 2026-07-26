@@ -244,14 +244,69 @@ _copilot_resolve_token() { return 1; }
 out=$(fetch_copilot 2>&1) || true
 assert_contains "$out" "not logged in"   "fetch_copilot: no token → error"
 
-# HTTP 200 with quota snapshots (COPILOT_GITHUB_TOKEN path)
-# percent_remaining=70 → used=30 for Premium; percent_remaining=80 → used=20 for Chat
+# Legacy request-based plan: percent_remaining=70 → 30% used for Premium.
 set_http_response "200" '{"copilot_plan":"copilot_pro","quota_snapshots":{"premium_interactions":{"percent_remaining":70.0,"unlimited":false},"chat":{"percent_remaining":80.0,"unlimited":false}},"quota_reset_date":"2026-04-01"}'
 _copilot_resolve_token() { printf "fake-token"; }
 out=$(fetch_copilot 2>&1) || true
-assert_contains "$out" "Premium"  "fetch_copilot 200: shows Premium bar"
-assert_contains "$out" "30%"      "fetch_copilot 200: Premium 30% used (100-70)"
-assert_contains "$out" "Chat"     "fetch_copilot 200: shows Chat bar"
+assert_contains "$out" "Premium"    "fetch_copilot legacy: shows Premium bar"
+assert_contains "$out" "30%"        "fetch_copilot legacy: Premium 30% used (100-70)"
+assert_contains "$out" "Chat"       "fetch_copilot legacy: shows Chat bar"
+assert_contains "$out" "20%"        "fetch_copilot legacy: Chat 20% used (100-80)"
+assert_not_contains "$out" "AI Credits" "fetch_copilot legacy: does not relabel requests as credits"
+
+# Token-based plan: the premium_interactions snapshot represents AI Credits.
+set_http_response "200" '{"copilot_plan":"copilot_pro","token_based_billing":true,"quota_reset_date_utc":"2026-08-01T00:00:00Z","quota_snapshots":{"premium_interactions":{"entitlement":1500,"quota_remaining":1125,"remaining":1125,"percent_remaining":75.0,"unlimited":false,"overage_count":0,"overage_permitted":true},"chat":{"unlimited":true},"completions":{"unlimited":true}}}'
+out=$(fetch_copilot 2>&1) || true
+assert_contains "$out" "AI Credits"       "fetch_copilot credits: shows AI Credits bar"
+assert_contains "$out" "25%"              "fetch_copilot credits: shows 25% used"
+assert_contains "$out" "375 / 1500 credits" "fetch_copilot credits: shows consumed and included credits"
+assert_not_contains "$out" "Premium"      "fetch_copilot credits: hides legacy Premium label"
+assert_not_contains "$out" "Chat"         "fetch_copilot credits: hides unlimited Chat quota"
+assert_not_contains "$out" "reset: --"    "fetch_copilot credits: parses quota_reset_date_utc"
+
+# Credits can exceed the included entitlement without double-counting a negative balance.
+set_http_response "200" '{"copilot_plan":"copilot_pro","token_based_billing":true,"quota_snapshots":{"premium_interactions":{"entitlement":1500,"quota_remaining":-25,"remaining":-25,"percent_remaining":0,"unlimited":false,"overage_count":25,"overage_permitted":true,"quota_reset_at":1785542400}}}'
+out=$(fetch_copilot 2>&1) || true
+assert_contains "$out" "100%"               "fetch_copilot credits overage: clamps bar at 100%"
+assert_contains "$out" "1525 / 1500 credits" "fetch_copilot credits overage: includes overage consumption"
+assert_not_contains "$out" "reset: --"       "fetch_copilot credits overage: parses snapshot reset epoch"
+
+# Fractional model usage is rounded without exposing floating-point artifacts.
+set_http_response "200" '{"copilot_plan":"copilot_pro","token_based_billing":true,"quota_snapshots":{"premium_interactions":{"entitlement":300,"quota_remaining":287.4,"remaining":287.4,"percent_remaining":95.8,"unlimited":false,"overage_count":0}}}'
+out=$(fetch_copilot 2>&1) || true
+assert_contains "$out" "12.6 / 300 credits"   "fetch_copilot credits: formats fractional consumption"
+assert_not_contains "$out" "12.600000000000"  "fetch_copilot credits: hides floating-point artifacts"
+
+# Some clients expose the credits quota as premium_models with a snapshot flag.
+set_http_response "200" '{"copilot_plan":"copilot_pro_plus","quota_reset_date_utc":"","quota_snapshots":{"premium_models":{"token_based_billing":true,"entitlement":7000,"quota_remaining":5250,"remaining":5250,"percent_remaining":75,"unlimited":false,"overage_count":0,"quota_reset_at":1785542400}}}'
+out=$(fetch_copilot 2>&1) || true
+assert_contains "$out" "AI Credits"          "fetch_copilot premium_models: detects snapshot billing flag"
+assert_contains "$out" "25%"                 "fetch_copilot premium_models: shows used percentage"
+assert_contains "$out" "1750 / 7000 credits" "fetch_copilot premium_models: shows credit consumption"
+assert_not_contains "$out" "reset: --"        "fetch_copilot premium_models: skips empty reset fields"
+
+# Free/limited plans expose Chat and Completions rather than premium usage.
+set_http_response "200" '{"copilot_plan":"individual","quota_snapshots":{"chat":{"entitlement":50,"remaining":40,"percent_remaining":80,"unlimited":false},"completions":{"entitlement":2000,"remaining":1500,"percent_remaining":75,"unlimited":false}},"limited_user_reset_date":"2026-08-01"}'
+out=$(fetch_copilot 2>&1) || true
+assert_contains "$out" "Chat"        "fetch_copilot limited snapshots: shows Chat"
+assert_contains "$out" "20%"         "fetch_copilot limited snapshots: shows Chat usage"
+assert_contains "$out" "Completions" "fetch_copilot limited snapshots: shows Completions"
+assert_contains "$out" "25%"         "fetch_copilot limited snapshots: shows Completions usage"
+assert_not_contains "$out" "Premium" "fetch_copilot limited snapshots: does not mislabel completions"
+
+# Legacy limited-user fallback still uses monthly entitlement and remaining counts.
+set_http_response "200" '{"copilot_plan":"individual","monthly_quotas":{"chat":50,"completions":2000},"limited_user_quotas":{"chat":40,"completions":1500},"limited_user_reset_date":"2026-08-01"}'
+out=$(fetch_copilot 2>&1) || true
+assert_contains "$out" "Completions" "fetch_copilot limited fallback: labels Completions correctly"
+assert_contains "$out" "25%"         "fetch_copilot limited fallback: derives Completions usage"
+assert_not_contains "$out" "Premium" "fetch_copilot limited fallback: does not use Premium label"
+
+# Unlimited or organization-managed plans without trackable quotas show the plan.
+set_http_response "200" '{"copilot_plan":"business","access_type_sku":"copilot_business","token_based_billing":true,"quota_snapshots":{"premium_interactions":{"unlimited":true}}}'
+out=$(fetch_copilot 2>&1) || true
+assert_contains "$out" "Plan"             "fetch_copilot unlimited: shows plan fallback"
+assert_contains "$out" "copilot business" "fetch_copilot unlimited: formats plan SKU"
+assert_not_contains "$out" "AI Credits"   "fetch_copilot unlimited: omits meaningless quota bar"
 
 # HTTP 401
 set_http_response "401" ""

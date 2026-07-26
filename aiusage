@@ -4,6 +4,7 @@ set -euo pipefail
 # ── config ──────────────────────────────────────────────
 VERSION="0.1.3"
 BAR_WIDTH=20
+LABEL_WIDTH=11
 FILL="█"
 EMPTY="░"
 GREEN="\033[32m"
@@ -120,7 +121,7 @@ draw_bar() {
   for ((i = 0; i < empty; i++)); do bar+="$EMPTY"; done
   bar+="${RESET}"
 
-  printf "  %-8s %b %3d%%\n" "$label" "$bar" "$percent"
+  printf "  %-*s %b %3d%%\n" "$LABEL_WIDTH" "$label" "$bar" "$percent"
 }
 
 draw_unavailable() {
@@ -128,7 +129,7 @@ draw_unavailable() {
   local bar="${DIM}"
   for ((i = 0; i < BAR_WIDTH; i++)); do bar+="$EMPTY"; done
   bar+="${RESET}"
-  printf "  %-8s %b  --%%\n" "$label" "$bar"
+  printf "  %-*s %b  --%%\n" "$LABEL_WIDTH" "$label" "$bar"
 }
 
 draw_error() {
@@ -141,12 +142,12 @@ draw_credits_line() {
   local used_fmt limit_fmt
   used_fmt=$(awk "BEGIN{printf \"%.2f\", $used/100}" 2>/dev/null || echo "$used")
   limit_fmt=$(awk "BEGIN{printf \"%.2f\", $limit/100}" 2>/dev/null || echo "$limit")
-  printf "  %-8s ${DIM}\$%s / \$%s${RESET}\n" "" "$used_fmt" "$limit_fmt"
+  printf "  %-*s ${DIM}\$%s / \$%s${RESET}\n" "$LABEL_WIDTH" "" "$used_fmt" "$limit_fmt"
 }
 
 draw_credit_balance_line() {
   local label="$1" balance="$2"
-  printf "  %-8s ${DIM}%s credits available${RESET}\n" "$label" "$balance"
+  printf "  %-*s ${DIM}%s credits available${RESET}\n" "$LABEL_WIDTH" "$label" "$balance"
 }
 
 calculate_percent() {
@@ -495,7 +496,7 @@ draw_reset() {
     fi
   fi
 
-  printf "  %-8s ${DIM}reset: %s${RESET}\n" "" "$reset_text"
+  printf "  %-*s ${DIM}reset: %s${RESET}\n" "$LABEL_WIDTH" "" "$reset_text"
 }
 
 SPINNER_FRAMES=('|' '/' '-' '\')
@@ -1247,7 +1248,7 @@ fetch_cursor() {
   local percent
   percent=$(calculate_percent "${used:-0}" "$limit")
   draw_bar "Monthly" "$percent"
-  printf "  %-8s ${DIM}%s / %s requests${RESET}\n" "" "${used:-0}" "$limit"
+  printf "  %-*s ${DIM}%s / %s requests${RESET}\n" "$LABEL_WIDTH" "" "${used:-0}" "$limit"
 }
 
 # ── gemini ──────────────────────────────────────────────
@@ -1406,7 +1407,7 @@ fetch_gemini() {
   draw_reset "$summary_reset_epoch"
 
   if [[ -n "$detail_line" ]]; then
-    printf "  %-8s ${DIM}detail: %s${RESET}\n" "" "$detail_line"
+    printf "  %-*s ${DIM}detail: %s${RESET}\n" "$LABEL_WIDTH" "" "$detail_line"
   fi
 
 }
@@ -1481,7 +1482,7 @@ fetch_jetbrains() {
   fi
   draw_reset "$reset_epoch"
 
-  printf "  %-8s ${DIM}%s / %s credits${RESET}\n" "" "${current%.*}" "${maximum%.*}"
+  printf "  %-*s ${DIM}%s / %s credits${RESET}\n" "$LABEL_WIDTH" "" "${current%.*}" "${maximum%.*}"
 
   if [[ -n "$topup_max" && "$topup_max" != "0" && "$topup_max" != "null" ]]; then
     local topup_percent
@@ -1492,7 +1493,7 @@ fetch_jetbrains() {
     else
       draw_unavailable "Top-up"
     fi
-    printf "  %-8s ${DIM}%s / %s credits${RESET}\n" "" "${topup_current%.*}" "${topup_max%.*}"
+    printf "  %-*s ${DIM}%s / %s credits${RESET}\n" "$LABEL_WIDTH" "" "${topup_current%.*}" "${topup_max%.*}"
   fi
 }
 
@@ -1637,21 +1638,39 @@ fetch_copilot() {
     return
   fi
 
-  local plan sku
+  local plan sku token_based
   plan=$(printf '%s' "$resp" | jq -r '.copilot_plan // ""' 2>/dev/null)
   sku=$(printf '%s' "$resp" | jq -r '.access_type_sku // ""' 2>/dev/null)
+  token_based=$(printf '%s' "$resp" | jq -r '
+    (.quota_snapshots.premium_models // .quota_snapshots.premium_interactions // {}) as $premium |
+    (.token_based_billing // $premium.token_based_billing // false) | tostring
+  ' 2>/dev/null)
 
-  # ── Step 1: try quota_snapshots (paid/pro plans) ──────────────────────────
-  # Fields use snake_case: quota_snapshots.premium_interactions / .chat
-  # Skip snapshots where unlimited==true (no meaningful quota limit to track).
-  local premium_pct chat_pct
-  local qs_p_pct qs_p_ent qs_p_rem qs_c_pct qs_c_ent qs_c_rem
-  qs_p_pct=$(printf '%s' "$resp" | jq -r '(.quota_snapshots.premium_interactions | if . == null or .unlimited == true then "" else (.percent_remaining // "") end)' 2>/dev/null)
-  qs_p_ent=$(printf '%s' "$resp" | jq -r '(.quota_snapshots.premium_interactions | if . == null or .unlimited == true then "" else (.entitlement // "") end)' 2>/dev/null)
-  qs_p_rem=$(printf '%s' "$resp" | jq -r '(.quota_snapshots.premium_interactions | if . == null or .unlimited == true then "" else (.remaining // "") end)' 2>/dev/null)
+  # ── Step 1: try quota_snapshots ───────────────────────────────────────────
+  # token_based_billing plans expose AI Credits through the premium snapshot.
+  # Legacy annual plans use the same shape for premium requests.
+  local premium_pct premium_ent premium_used chat_pct completions_pct
+  local qs_p_pct qs_p_ent qs_p_rem qs_p_used
+  local qs_c_pct qs_c_ent qs_c_rem qs_comp_pct qs_comp_ent qs_comp_rem
+  qs_p_pct=$(printf '%s' "$resp" | jq -r '((.quota_snapshots.premium_models // .quota_snapshots.premium_interactions) | if . == null or .unlimited == true then "" else (.percent_remaining // "") end)' 2>/dev/null)
+  qs_p_ent=$(printf '%s' "$resp" | jq -r '((.quota_snapshots.premium_models // .quota_snapshots.premium_interactions) | if . == null or .unlimited == true then "" else (.entitlement // "") end)' 2>/dev/null)
+  qs_p_rem=$(printf '%s' "$resp" | jq -r '((.quota_snapshots.premium_models // .quota_snapshots.premium_interactions) | if . == null or .unlimited == true then "" else (.quota_remaining // .remaining // "") end)' 2>/dev/null)
+  qs_p_used=$(printf '%s' "$resp" | jq -r '
+    def clean_credits: (. * 100 | round / 100);
+    (.quota_snapshots.premium_models // .quota_snapshots.premium_interactions) |
+    if . == null or .unlimited == true or (.entitlement | type) != "number" then ""
+    elif ((.overage_count // 0) | type) == "number" and (.overage_count // 0) > 0
+      then (([.entitlement - ([.quota_remaining // 0, 0] | max), 0] | max) + .overage_count | clean_credits)
+    elif ((.quota_remaining // .remaining) | type) == "number"
+      then ([.entitlement - (.quota_remaining // .remaining), 0] | max | clean_credits)
+    else "" end
+  ' 2>/dev/null)
   qs_c_pct=$(printf '%s' "$resp" | jq -r '(.quota_snapshots.chat | if . == null or .unlimited == true then "" else (.percent_remaining // "") end)' 2>/dev/null)
   qs_c_ent=$(printf '%s' "$resp" | jq -r '(.quota_snapshots.chat | if . == null or .unlimited == true then "" else (.entitlement // "") end)' 2>/dev/null)
-  qs_c_rem=$(printf '%s' "$resp" | jq -r '(.quota_snapshots.chat | if . == null or .unlimited == true then "" else (.remaining // "") end)' 2>/dev/null)
+  qs_c_rem=$(printf '%s' "$resp" | jq -r '(.quota_snapshots.chat | if . == null or .unlimited == true then "" else (.quota_remaining // .remaining // "") end)' 2>/dev/null)
+  qs_comp_pct=$(printf '%s' "$resp" | jq -r '(.quota_snapshots.completions | if . == null or .unlimited == true then "" else (.percent_remaining // "") end)' 2>/dev/null)
+  qs_comp_ent=$(printf '%s' "$resp" | jq -r '(.quota_snapshots.completions | if . == null or .unlimited == true then "" else (.entitlement // "") end)' 2>/dev/null)
+  qs_comp_rem=$(printf '%s' "$resp" | jq -r '(.quota_snapshots.completions | if . == null or .unlimited == true then "" else (.quota_remaining // .remaining // "") end)' 2>/dev/null)
 
   # Use percent_remaining if present; otherwise derive from entitlement + remaining
   if [[ -n "$qs_p_pct" && "$qs_p_pct" != "null" ]]; then
@@ -1659,11 +1678,19 @@ fetch_copilot() {
   elif [[ -n "$qs_p_ent" && "$qs_p_ent" != "null" && -n "$qs_p_rem" && "$qs_p_rem" != "null" ]]; then
     premium_pct=$(awk "BEGIN{ e=$qs_p_ent; if(e>0) printf \"%.1f\", ($qs_p_rem/e)*100 }" 2>/dev/null || true)
   fi
+  premium_ent="$qs_p_ent"
+  premium_used="$qs_p_used"
 
   if [[ -n "$qs_c_pct" && "$qs_c_pct" != "null" ]]; then
     chat_pct="$qs_c_pct"
   elif [[ -n "$qs_c_ent" && "$qs_c_ent" != "null" && -n "$qs_c_rem" && "$qs_c_rem" != "null" ]]; then
     chat_pct=$(awk "BEGIN{ e=$qs_c_ent; if(e>0) printf \"%.1f\", ($qs_c_rem/e)*100 }" 2>/dev/null || true)
+  fi
+
+  if [[ -n "$qs_comp_pct" && "$qs_comp_pct" != "null" ]]; then
+    completions_pct="$qs_comp_pct"
+  elif [[ -n "$qs_comp_ent" && "$qs_comp_ent" != "null" && -n "$qs_comp_rem" && "$qs_comp_rem" != "null" ]]; then
+    completions_pct=$(awk "BEGIN{ e=$qs_comp_ent; if(e>0) printf \"%.1f\", ($qs_comp_rem/e)*100 }" 2>/dev/null || true)
   fi
 
   # ── Step 2: fallback — derive from monthly_quotas + limited_user_quotas ───
@@ -1674,8 +1701,8 @@ fetch_copilot() {
   mq_chat=$(printf '%s' "$resp" | jq -r '.monthly_quotas.chat // ""' 2>/dev/null)
   lq_chat=$(printf '%s' "$resp" | jq -r '.limited_user_quotas.chat // ""' 2>/dev/null)
 
-  if [[ -z "$premium_pct" ]] && [[ -n "$mq_completions" && "$mq_completions" != "null" ]] && [[ -n "$lq_completions" && "$lq_completions" != "null" ]]; then
-    premium_pct=$(awk "BEGIN{ e=$mq_completions; if(e>0) printf \"%.1f\", ($lq_completions/e)*100 }" 2>/dev/null || true)
+  if [[ -z "$completions_pct" ]] && [[ -n "$mq_completions" && "$mq_completions" != "null" ]] && [[ -n "$lq_completions" && "$lq_completions" != "null" ]]; then
+    completions_pct=$(awk "BEGIN{ e=$mq_completions; if(e>0) printf \"%.1f\", ($lq_completions/e)*100 }" 2>/dev/null || true)
   fi
 
   if [[ -z "$chat_pct" ]] && [[ -n "$mq_chat" && "$mq_chat" != "null" ]] && [[ -n "$lq_chat" && "$lq_chat" != "null" ]]; then
@@ -1683,29 +1710,46 @@ fetch_copilot() {
   fi
 
   local reset_date reset_epoch
-  reset_date=$(printf '%s' "$resp" | jq -r '.quota_reset_date // .limited_user_reset_date // ""' 2>/dev/null)
+  reset_date=$(printf '%s' "$resp" | jq -r '
+    (.quota_snapshots.premium_models // .quota_snapshots.premium_interactions // {}) as $premium |
+    [.quota_reset_date_utc, .quota_reset_date, $premium.quota_reset_at,
+      $premium.reset_date, .limited_user_reset_date] |
+    map(select(. != null and . != "")) | .[0] // ""
+  ' 2>/dev/null)
   # Expand plain YYYY-MM-DD so normalize_epoch can parse it
   [[ "$reset_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && reset_date="${reset_date}T00:00:00"
   reset_epoch=$(normalize_epoch "$reset_date")
 
   # ── Render ────────────────────────────────────────────────────────────────
-  if [[ -n "$premium_pct" || -n "$chat_pct" ]]; then
-    local premium_used chat_used
+  if [[ -n "$premium_pct" || -n "$chat_pct" || -n "$completions_pct" ]]; then
+    local premium_label="Premium" premium_used_pct chat_used completions_used rendered=0
+    [[ "$token_based" == "true" ]] && premium_label="AI Credits"
+
     if [[ -n "$premium_pct" ]]; then
-      premium_used=$(calculate_used_percent_from_remaining "$premium_pct")
-      draw_bar "Premium" "$premium_used"
+      premium_used_pct=$(calculate_used_percent_from_remaining "$premium_pct")
+      draw_bar "$premium_label" "$premium_used_pct"
+      if [[ "$token_based" == "true" && -n "$premium_used" && -n "$premium_ent" ]]; then
+        printf "  %-*s ${DIM}%s / %s credits${RESET}\n" "$LABEL_WIDTH" "" "$premium_used" "$premium_ent"
+      fi
+      rendered=1
     fi
     if [[ -n "$chat_pct" ]]; then
       chat_used=$(calculate_used_percent_from_remaining "$chat_pct")
-      [[ -n "$premium_pct" ]] && printf "\n"
+      ((rendered == 1)) && printf "\n"
       draw_bar "Chat" "$chat_used"
+      rendered=1
+    fi
+    if [[ -n "$completions_pct" ]]; then
+      completions_used=$(calculate_used_percent_from_remaining "$completions_pct")
+      ((rendered == 1)) && printf "\n"
+      draw_bar "Completions" "$completions_used"
     fi
     draw_reset "$reset_epoch"
-    [[ -n "$plan" ]] && printf "  %-8s ${DIM}%s${RESET}\n" "" "$plan"
+    [[ -n "$plan" ]] && printf "  %-*s ${DIM}%s${RESET}\n" "$LABEL_WIDTH" "" "$plan"
   else
     # No quota data (e.g. Copilot Business seat — limits managed at org level)
     local plan_label="${sku:-${plan:-unknown}}"
-    printf "  %-8s ${DIM}%s${RESET}\n" "Plan" "${plan_label//_/ }"
+    printf "  %-*s ${DIM}%s${RESET}\n" "$LABEL_WIDTH" "Plan" "${plan_label//_/ }"
   fi
 }
 

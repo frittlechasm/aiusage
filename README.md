@@ -60,9 +60,10 @@ curl -fsSL https://raw.githubusercontent.com/frittlechasm/aiusage/main/install.s
 | Cursor | Monthly credit or request usage | Browser cookies or `CURSOR_COOKIE` |
 | Gemini | Quota usage for Google OAuth / Code Assist | `gemini` login credentials |
 | JetBrains | AI credit usage from local IDE quota state | `AIAssistantQuotaManager2.xml` |
-| Copilot | `Premium` and `Chat` quota bars | `COPILOT_GITHUB_TOKEN` or `copilot login` |
+| Copilot | AI Credits usage, with legacy `Premium`, `Chat`, and `Completions` quotas when applicable | `COPILOT_GITHUB_TOKEN` or `copilot login` |
 
 - Cursor session lookup is automatic from Firefox, Chrome, Arc, Brave, Edge, or Helium.
+- Copilot uses AI Credits for current plans and retains premium-request tracking for legacy annual plans.
 - Copilot plans with unlimited or org-managed quotas may show only the plan name instead of bars.
 - Provider endpoints and response shapes can change over time.
 
