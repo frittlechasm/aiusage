@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="aiusage">
+  <rect width="64" height="64" rx="12" fill="#16d9e8"/>
+  <g transform="translate(5.12 5.12) scale(.84)">
+    <path
+      d="M10 49 24 14l13 32c2.3 5.6 6 8 10.4 8C52.5 54 55 49.1 55 42V31"
+      fill="none"
+      stroke="#071a5e"
+      stroke-width="9"
+      stroke-linecap="square"
+      stroke-linejoin="round"
+    />
+    <rect x="50.5" y="18" width="9" height="8" rx="1" fill="#071a5e"/>
+  </g>
+</svg>
