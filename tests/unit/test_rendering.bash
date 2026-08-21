@@ -92,6 +92,28 @@ assert_contains "$out" "HTTP 429"               "draw_http_error 429: shows HTTP
 out=$(draw_http_error "503" "ignored_msg")
 assert_contains "$out" "HTTP 503"               "draw_http_error 503: shows HTTP status code"
 
+# ── wait_and_render_fetches ───────────────────────────────
+
+# Regression: ((done_count++)) returns 1 when incrementing from zero, which
+# aborted strict-mode runs as soon as the first provider completed.
+out=$(
+  set -e
+  tmp_done=$(mktemp)
+  printf 'done line\n' >"$tmp_done"
+  tmp_pending=$(mktemp)
+  sleep 0.25 & pending_pid=$!
+  WAIT_LABELS=("Done" "Pending")
+  WAIT_TMPS=("$tmp_done" "$tmp_pending")
+  WAIT_PIDS=("$pending_pid")
+  wait_and_render_fetches
+  printf "COMPLETED\n"
+  rm -f "$tmp_done" "$tmp_pending"
+)
+assert_contains "$out" "COMPLETED"   "wait loop: survives first completion under set -e"
+assert_contains "$out" "Done"        "wait loop: renders completed section"
+assert_contains "$out" "done line"   "wait loop: renders worker output"
+assert_contains "$out" "Pending"     "wait loop: renders pending section"
+
 # ── spinner_frame ─────────────────────────────────────────
 # SPINNER_FRAMES=('|' '/' '-' '\')
 

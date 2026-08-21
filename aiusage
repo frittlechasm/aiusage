@@ -602,7 +602,9 @@ wait_and_render_fetches() {
         kill -0 "${WAIT_PIDS[$i]}" 2>/dev/null || WAIT_DONE[$i]=1
       fi
       if ((WAIT_DONE[i])); then
-        ((done_count++))
+        # Plain assignment: ((done_count++)) returns 1 when incrementing from
+        # zero, which aborts strict-mode runs on bash >= 4.
+        done_count=$((done_count + 1))
       else
         all_done=0
       fi
