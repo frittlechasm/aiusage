@@ -26,6 +26,24 @@ fi
 
 # ── helpers ─────────────────────────────────────────────
 
+# Return value when it is a plain integer or decimal number, else fallback.
+# Every API-derived value must pass through this before it reaches bash
+# arithmetic, an interpolated awk program, or draw_* helpers: bash evaluates
+# variable contents as expressions and awk splices them as program text.
+numeric_or() {
+  local value="${1:-}" fallback="${2-0}"
+  [[ "$value" =~ ^-?[0-9]+([.][0-9]+)?$ ]] || value="$fallback"
+  printf '%s' "$value"
+}
+
+# Percent remaining given entitlement and remainder; empty on bad input.
+percent_remaining_of() {
+  local entitlement remainder
+  entitlement=$(numeric_or "${1:-}" 0)
+  remainder=$(numeric_or "${2:-}" 0)
+  awk "BEGIN{e=$entitlement; if(e>0) printf \"%.1f\", ($remainder/e)*100}" 2>/dev/null || true
+}
+
 required_dependency_install_hint() {
   if [[ "${OSTYPE:-}" == darwin* ]] || [[ "$(uname -s 2>/dev/null || true)" == "Darwin" ]]; then
     cat <<'EOF'
@@ -102,6 +120,7 @@ check_required_dependencies() {
 
 draw_bar() {
   local label="$1" percent="$2" note="${3:-}"
+  percent=$(numeric_or "$percent" 0)
   percent="${percent%.*}"
   [[ -z "$percent" ]] && percent=0
   ((percent < 0)) && percent=0
@@ -148,6 +167,8 @@ draw_error() {
 draw_credits_line() {
   local used="$1" limit="$2"
   local used_fmt limit_fmt
+  used=$(numeric_or "$used" 0)
+  limit=$(numeric_or "$limit" 0)
   used_fmt=$(awk "BEGIN{printf \"%.2f\", $used/100}" 2>/dev/null || echo "$used")
   limit_fmt=$(awk "BEGIN{printf \"%.2f\", $limit/100}" 2>/dev/null || echo "$limit")
   printf "  %-*s ${DIM}\$%s / \$%s${RESET}\n" "$LABEL_WIDTH" "" "$used_fmt" "$limit_fmt"
@@ -159,13 +180,21 @@ draw_credit_balance_line() {
 }
 
 calculate_percent() {
-  local used="${1:-0}" limit="${2:-0}" fallback="${3:-0}"
+  local used limit fallback
+  used=$(numeric_or "${1:-0}" 0)
+  limit=$(numeric_or "${2:-0}" 0)
+  fallback=$(numeric_or "${3:-0}" 0)
   awk "BEGIN{l=$limit; if (l > 0) printf \"%.0f\", ($used / l) * 100; else print $fallback}" 2>/dev/null || echo "$fallback"
 }
 
 calculate_used_percent_from_remaining() {
   local remaining="${1:-}" fallback="${2:-0}"
   [[ -n "$remaining" && "$remaining" != "null" ]] || {
+    echo "$fallback"
+    return 0
+  }
+  remaining=$(numeric_or "$remaining" "")
+  [[ -n "$remaining" ]] || {
     echo "$fallback"
     return 0
   }
@@ -1702,7 +1731,7 @@ fetch_copilot() {
   if [[ -n "$qs_p_pct" && "$qs_p_pct" != "null" ]]; then
     premium_pct="$qs_p_pct"
   elif [[ -n "$qs_p_ent" && "$qs_p_ent" != "null" && -n "$qs_p_rem" && "$qs_p_rem" != "null" ]]; then
-    premium_pct=$(awk "BEGIN{ e=$qs_p_ent; if(e>0) printf \"%.1f\", ($qs_p_rem/e)*100 }" 2>/dev/null || true)
+    premium_pct=$(percent_remaining_of "$qs_p_ent" "$qs_p_rem")
   fi
   premium_ent="$qs_p_ent"
   premium_used="$qs_p_used"
@@ -1710,13 +1739,13 @@ fetch_copilot() {
   if [[ -n "$qs_c_pct" && "$qs_c_pct" != "null" ]]; then
     chat_pct="$qs_c_pct"
   elif [[ -n "$qs_c_ent" && "$qs_c_ent" != "null" && -n "$qs_c_rem" && "$qs_c_rem" != "null" ]]; then
-    chat_pct=$(awk "BEGIN{ e=$qs_c_ent; if(e>0) printf \"%.1f\", ($qs_c_rem/e)*100 }" 2>/dev/null || true)
+    chat_pct=$(percent_remaining_of "$qs_c_ent" "$qs_c_rem")
   fi
 
   if [[ -n "$qs_comp_pct" && "$qs_comp_pct" != "null" ]]; then
     completions_pct="$qs_comp_pct"
   elif [[ -n "$qs_comp_ent" && "$qs_comp_ent" != "null" && -n "$qs_comp_rem" && "$qs_comp_rem" != "null" ]]; then
-    completions_pct=$(awk "BEGIN{ e=$qs_comp_ent; if(e>0) printf \"%.1f\", ($qs_comp_rem/e)*100 }" 2>/dev/null || true)
+    completions_pct=$(percent_remaining_of "$qs_comp_ent" "$qs_comp_rem")
   fi
 
   # ── Step 2: fallback — derive from monthly_quotas + limited_user_quotas ───
@@ -1728,11 +1757,11 @@ fetch_copilot() {
   lq_chat=$(printf '%s' "$resp" | jq -r '.limited_user_quotas.chat // ""' 2>/dev/null)
 
   if [[ -z "$completions_pct" ]] && [[ -n "$mq_completions" && "$mq_completions" != "null" ]] && [[ -n "$lq_completions" && "$lq_completions" != "null" ]]; then
-    completions_pct=$(awk "BEGIN{ e=$mq_completions; if(e>0) printf \"%.1f\", ($lq_completions/e)*100 }" 2>/dev/null || true)
+    completions_pct=$(percent_remaining_of "$mq_completions" "$lq_completions")
   fi
 
   if [[ -z "$chat_pct" ]] && [[ -n "$mq_chat" && "$mq_chat" != "null" ]] && [[ -n "$lq_chat" && "$lq_chat" != "null" ]]; then
-    chat_pct=$(awk "BEGIN{ e=$mq_chat; if(e>0) printf \"%.1f\", ($lq_chat/e)*100 }" 2>/dev/null || true)
+    chat_pct=$(percent_remaining_of "$mq_chat" "$lq_chat")
   fi
 
   local reset_date reset_epoch

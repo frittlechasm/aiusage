@@ -42,6 +42,17 @@ assert_contains "$out" "72%"                    "draw_bar: decimal percent trunc
 out=$(draw_bar "Extra" "0.5")
 assert_contains "$out" "0%"                     "draw_bar: fractional under 1% truncated to 0"
 
+# Malformed percent from an API must render as 0%, not crash or evaluate.
+out=$(draw_bar "5h" "abc")
+assert_contains "$out" "0%"                     "draw_bar: non-numeric percent renders as 0"
+
+out=$(
+  set -e
+  draw_bar "5h" '$(id)' >/dev/null
+  printf "OK\n"
+)
+assert_contains "$out" "OK"                     "draw_bar: strict-mode survives expression-like input"
+
 # Optional notes stay on the bar line.
 out=$(draw_bar "Weekly" 30 "3 resets")
 assert_contains "$out" "· 3 resets"             "draw_bar: shows an inline note"

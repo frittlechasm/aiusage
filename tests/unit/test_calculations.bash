@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Unit tests: calculate_percent, calculate_used_percent_from_remaining
+# Unit tests: calculate_percent, calculate_used_percent_from_remaining,
+# numeric_or, percent_remaining_of
 # shellcheck source=../helpers/common.bash
 source "$(dirname "$0")/../helpers/common.bash"
 
@@ -27,3 +28,36 @@ assert_eq "7"   "$(calculate_used_percent_from_remaining 'null' 7)" "used_from_r
 assert_eq "9"   "$(calculate_used_percent_from_remaining '' 9)"     "used_from_remaining: empty uses fallback"
 assert_eq "0"   "$(calculate_used_percent_from_remaining 'null')"   "used_from_remaining: null uses default fallback (0)"
 assert_eq "0"   "$(calculate_used_percent_from_remaining '')"       "used_from_remaining: empty uses default fallback (0)"
+
+# ── numeric_or ────────────────────────────────────────────
+
+assert_eq "5"    "$(numeric_or 5 9)"          "numeric_or: integer passes through"
+assert_eq "72.5" "$(numeric_or 72.5 9)"       "numeric_or: decimal passes through"
+assert_eq "-3"   "$(numeric_or -3 9)"         "numeric_or: negative integer passes through"
+assert_eq "-1.5" "$(numeric_or -1.5 9)"       "numeric_or: negative decimal passes through"
+assert_eq "9"    "$(numeric_or abc 9)"        "numeric_or: garbage uses fallback"
+assert_eq "9"    "$(numeric_or '' 9)"         "numeric_or: empty uses fallback"
+assert_eq "0"    "$(numeric_or 'null')"       "numeric_or: null uses default fallback (0)"
+assert_eq ""     "$(numeric_or abc '')"       "numeric_or: empty fallback stays empty"
+
+# ── percent_remaining_of ──────────────────────────────────
+
+assert_eq "50.0" "$(percent_remaining_of 100 50)"     "percent_remaining_of: half remaining"
+assert_eq "0.0"  "$(percent_remaining_of 100 0)"      "percent_remaining_of: none remaining"
+assert_eq ""     "$(percent_remaining_of 0 50)"       "percent_remaining_of: zero entitlement → empty"
+assert_eq ""     "$(percent_remaining_of abc def)"    "percent_remaining_of: garbage inputs → empty"
+
+# ── strict-mode safety for untrusted values ───────────────
+# Production invokes these helpers under set -euo pipefail; malformed API
+# strings must fall back instead of crashing or evaluating as expressions.
+
+out=$(
+  set -e
+  calculate_percent "abc" ";system(\"echo pwned\")" "7" >/dev/null
+  calculate_used_percent_from_remaining '$(id)' "4" >/dev/null
+  percent_remaining_of '`id`' 'x' >/dev/null
+  printf "OK\n"
+)
+assert_contains "$out" "OK" "untrusted input: strict-mode helpers survive malformed values"
+assert_eq "7"  "$(calculate_percent 'abc' 'def' 7)"   "calculate_percent: non-numeric operands use fallback"
+assert_eq "8"  "$(calculate_used_percent_from_remaining 'abc' 8)" "used_from_remaining: non-numeric uses fallback"
