@@ -25,6 +25,21 @@ assert_eq "nested" "$(cat "$deep_file")"                       "secure_write: cr
 
 rm -rf "$tmp_dir"
 
+# ── linux_secure_cache_write: symlink safety ──────────────
+
+tmp_dir=$(mktemp -d)
+victim="$tmp_dir/victim"
+printf "original" >"$victim"
+ln -s "$victim" "$tmp_dir/link"
+
+linux_secure_cache_write "$tmp_dir/link" "secret_value"
+assert_eq "original"    "$(cat "$victim")"                "secure_write: symlink target untouched"
+assert_exit_1 "secure_write: symlink replaced, not followed" test -L "$tmp_dir/link"
+assert_eq "secret_value" "$(cat "$tmp_dir/link")"         "secure_write: value at original path"
+assert_eq "600"          "$(file_perms "$tmp_dir/link")"  "secure_write: replaced file keeps 0600"
+
+rm -rf "$tmp_dir"
+
 # ── linux_ttl_cache_read (Linux only) ─────────────────────
 
 if [[ "$(uname)" != "Linux" ]]; then

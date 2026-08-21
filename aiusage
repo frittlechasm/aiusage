@@ -238,10 +238,19 @@ linux_ttl_cache_read() {
 }
 
 linux_secure_cache_write() {
-  local path="$1" value="$2"
-  mkdir -p "$(dirname "$path")"
-  printf '%s' "$value" >"$path"
-  chmod 600 "$path"
+  local path="$1" value="$2" dir tmp
+  dir=$(dirname "$path")
+  mkdir -p "$dir"
+  chmod 700 "$dir" 2>/dev/null || true
+  # Write to a 0600 temp file created by mktemp and rename into place: no
+  # window where the secret sits at the final path with default permissions,
+  # and an existing symlink is replaced instead of written through.
+  tmp=$(mktemp "$dir/.aiusage.XXXXXX") || return 1
+  if ! printf '%s' "$value" >"$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  mv -f "$tmp" "$path"
 }
 
 HTTP_STATUS="000"
