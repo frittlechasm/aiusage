@@ -51,3 +51,38 @@ else
   assert_eq "" "$result"                         "ttl_read: TTL=0 always expired"
   assert_exit_1 "ttl_read: expired file is deleted" test -f "$tmp_cache2"
 fi
+
+# ── file_mtime (cross-platform) ───────────────────────────
+
+tmp_mt=$(mktemp)
+mt=$(file_mtime "$tmp_mt")
+now=$(date +%s)
+case "$mt" in
+  '' | *[!0-9]*)
+    fail "file_mtime: returns numeric mtime" "got='$mt'"
+    ;;
+  *)
+    if ((mt >= now - 60 && mt <= now + 60)); then
+      pass "file_mtime: returns numeric mtime"
+    else
+      fail "file_mtime: returns numeric mtime" "mtime=$mt now=$now"
+    fi
+    ;;
+esac
+assert_eq "0" "$(file_mtime "$tmp_dir/nonexistent")" "file_mtime: missing file → 0"
+rm -f "$tmp_mt"
+
+# ── find_jetbrains_quota_file ─────────────────────────────
+
+fake_home=$(mktemp -d)
+quota_xml="$fake_home/.config/JetBrains/proj/options/AIAssistantQuotaManager2.xml"
+mkdir -p "$(dirname "$quota_xml")"
+printf 'x' >"$quota_xml"
+
+found=$(
+  set -e
+  HOME="$fake_home" find_jetbrains_quota_file
+)
+assert_contains "$found" "AIAssistantQuotaManager2.xml" "jetbrains_quota: finds quota file under fake HOME"
+
+rm -rf "$fake_home"

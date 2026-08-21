@@ -359,6 +359,18 @@ provider_available() {
   esac
 }
 
+# Portable mtime in seconds. GNU stat must be tried first: BSD stat -f
+# takes a format string, but GNU stat -f means --file-system, so the old
+# BSD-first ordering produced garbage output on Linux.
+file_mtime() {
+  local mtime
+  mtime=$(stat -c "%Y" "$1" 2>/dev/null || stat -f "%m" "$1" 2>/dev/null) || true
+  case "$mtime" in
+  '' | *[!0-9]*) printf "0" ;;
+  *) printf "%s" "$mtime" ;;
+  esac
+}
+
 find_jetbrains_quota_file() {
   local roots=()
   [[ -d "$HOME/Library/Application Support/JetBrains" ]] && roots+=("$HOME/Library/Application Support/JetBrains")
@@ -367,7 +379,7 @@ find_jetbrains_quota_file() {
 
   local file newest_file="" newest_mtime=0 mtime
   while IFS= read -r file; do
-    mtime=$(stat -f "%m" "$file" 2>/dev/null || stat -c "%Y" "$file" 2>/dev/null || echo 0)
+    mtime=$(file_mtime "$file")
     if ((mtime > newest_mtime)); then
       newest_mtime="$mtime"
       newest_file="$file"
