@@ -355,3 +355,86 @@ set_http_response "000" ""
 _copilot_resolve_token() { printf "fake-token"; }
 out=$(fetch_copilot 2>&1) || true
 assert_contains "$out" "network error"   "fetch_copilot 000: network error message"
+
+# ── fetch_opencode_go ───────────────────────────────────────
+
+# No environment key or OpenCode auth entry.
+_tmp=$(make_tmp_home)
+out=$(HOME="$_tmp" XDG_DATA_HOME= OPENCODE_GO_API_KEY= OPENCODE_API_KEY= fetch_opencode_go 2>&1) || true
+rm -rf "$_tmp"
+assert_contains "$out" "not logged in" "fetch_opencode_go: no key → error"
+
+# Resolve the provider-specific key from OpenCode's default auth store.
+_tmp=$(make_tmp_home)
+mkdir -p "$_tmp/.local/share/opencode"
+printf '{"opencode-go":{"type":"api","key":"file-key"}}' >"$_tmp/.local/share/opencode/auth.json"
+key=$(HOME="$_tmp" XDG_DATA_HOME= OPENCODE_GO_API_KEY= OPENCODE_API_KEY= _opencode_go_resolve_key)
+rm -rf "$_tmp"
+assert_eq "file-key" "$key" "opencode-go auth: reads default OpenCode auth store"
+
+# Respect XDG_DATA_HOME and ignore credentials with the wrong auth type.
+_tmp=$(make_tmp_home)
+mkdir -p "$_tmp/xdg/opencode"
+printf '{"opencode-go":{"type":"oauth","key":"wrong-type"}}' >"$_tmp/xdg/opencode/auth.json"
+key=$(HOME="$_tmp" XDG_DATA_HOME="$_tmp/xdg" OPENCODE_GO_API_KEY= OPENCODE_API_KEY= _opencode_go_resolve_key) || true
+assert_eq "" "$key" "opencode-go auth: rejects non-API credentials"
+printf '{"opencode-go":{"type":"api","key":"xdg-key"}}' >"$_tmp/xdg/opencode/auth.json"
+key=$(HOME="$_tmp" XDG_DATA_HOME="$_tmp/xdg" OPENCODE_GO_API_KEY= OPENCODE_API_KEY= _opencode_go_resolve_key)
+rm -rf "$_tmp"
+assert_eq "xdg-key" "$key" "opencode-go auth: respects XDG_DATA_HOME"
+
+# The provider-specific environment variable wins over the official shared name.
+key=$(OPENCODE_GO_API_KEY="specific-key" OPENCODE_API_KEY="shared-key" _opencode_go_resolve_key)
+assert_eq "specific-key" "$key" "opencode-go auth: provider-specific env key takes precedence"
+key=$(OPENCODE_GO_API_KEY= OPENCODE_API_KEY="shared-key" _opencode_go_resolve_key)
+assert_eq "shared-key" "$key" "opencode-go auth: supports OPENCODE_API_KEY"
+
+# Request contract: public endpoint with Bearer authentication.
+_capture=$(mktemp)
+http_json() {
+  printf '%s\n' "$@" >"$_capture"
+  HTTP_STATUS="200"
+  HTTP_BODY='{"usage":{"rolling":{"percent":12,"resetsAt":"2026-09-01T02:00:00Z"}}}'
+}
+out=$(OPENCODE_GO_API_KEY="fake-key" OPENCODE_API_KEY= fetch_opencode_go 2>&1) || true
+request=$(<"$_capture")
+rm -f "$_capture"
+assert_contains "$request" "https://opencode.ai/zen/go/v1/usage" "fetch_opencode_go request: uses public usage endpoint"
+assert_contains "$request" "Authorization: Bearer fake-key" "fetch_opencode_go request: sends Bearer key"
+assert_contains "$out" "5h" "fetch_opencode_go request: renders response"
+
+# All authoritative windows are rendered, including an explicit zero.
+set_http_response "200" '{"usage":{"rolling":{"percent":12.5,"resetsAt":"2026-09-01T02:00:00Z"},"weekly":{"percent":47,"resetsAt":"2026-09-08T00:00:00Z"},"monthly":{"percent":0,"resetsAt":"2026-10-01T00:00:00Z"}},"useBalance":false}'
+out=$(OPENCODE_GO_API_KEY="fake-key" OPENCODE_API_KEY= fetch_opencode_go 2>&1) || true
+assert_contains "$out" "5h"      "fetch_opencode_go 200: shows rolling 5h bar"
+assert_contains "$out" "12%"     "fetch_opencode_go 200: shows rolling usage"
+assert_contains "$out" "Weekly"  "fetch_opencode_go 200: shows weekly bar"
+assert_contains "$out" "47%"     "fetch_opencode_go 200: shows weekly usage"
+assert_contains "$out" "Monthly" "fetch_opencode_go 200: shows monthly bar"
+assert_contains "$out" "0%"      "fetch_opencode_go 200: preserves zero usage"
+assert_not_contains "$out" "reset: --" "fetch_opencode_go 200: renders API reset timestamps"
+
+# The older dashboard field shape remains compatible, and optional windows stay aligned.
+set_http_response "200" '{"rollingUsage":{"usagePercent":9,"resetInSec":1200},"monthlyUsage":{"usagePercent":31,"resetInSec":86400}}'
+out=$(OPENCODE_GO_API_KEY="fake-key" OPENCODE_API_KEY= fetch_opencode_go 2>&1) || true
+assert_contains "$out" "5h" "fetch_opencode_go partial: keeps rolling window"
+assert_not_contains "$out" "Weekly" "fetch_opencode_go partial: omits missing weekly window"
+assert_contains "$out" "Monthly" "fetch_opencode_go partial: keeps monthly window aligned"
+assert_contains "$out" "31%" "fetch_opencode_go partial: shows monthly usage"
+
+# Authentication, network, and response-shape errors are distinct.
+set_http_response "401" ""
+out=$(OPENCODE_GO_API_KEY="expired-key" OPENCODE_API_KEY= fetch_opencode_go 2>&1) || true
+assert_contains "$out" "API key is invalid" "fetch_opencode_go 401: invalid key message"
+
+set_http_response "403" ""
+out=$(OPENCODE_GO_API_KEY="fake-key" OPENCODE_API_KEY= fetch_opencode_go 2>&1) || true
+assert_contains "$out" "API key is invalid" "fetch_opencode_go 403: invalid key message"
+
+set_http_response "000" ""
+out=$(OPENCODE_GO_API_KEY="fake-key" OPENCODE_API_KEY= fetch_opencode_go 2>&1) || true
+assert_contains "$out" "network error" "fetch_opencode_go 000: network error message"
+
+set_http_response "200" '{"unexpected":true}'
+out=$(OPENCODE_GO_API_KEY="fake-key" OPENCODE_API_KEY= fetch_opencode_go 2>&1) || true
+assert_contains "$out" "usage data is unavailable" "fetch_opencode_go malformed 200: response-shape error"

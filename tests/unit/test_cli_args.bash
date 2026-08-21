@@ -22,6 +22,7 @@ assert_exit_0 "provider_is_known: cursor"    provider_is_known "cursor"
 assert_exit_0 "provider_is_known: gemini"    provider_is_known "gemini"
 assert_exit_0 "provider_is_known: jetbrains" provider_is_known "jetbrains"
 assert_exit_0 "provider_is_known: copilot"   provider_is_known "copilot"
+assert_exit_0 "provider_is_known: opencode-go" provider_is_known "opencode-go"
 assert_exit_1 "provider_is_known: openai"    provider_is_known "openai"
 assert_exit_1 "provider_is_known: foobar"    provider_is_known "foobar"
 assert_exit_1 "provider_is_known: empty"     provider_is_known ""
@@ -35,6 +36,7 @@ assert_eq "Cursor"    "$(provider_label 'cursor')"    "provider_label: cursor"
 assert_eq "Gemini"    "$(provider_label 'gemini')"    "provider_label: gemini"
 assert_eq "JetBrains" "$(provider_label 'jetbrains')" "provider_label: jetbrains"
 assert_eq "Copilot"   "$(provider_label 'copilot')"   "provider_label: copilot"
+assert_eq "OpenCode Go" "$(provider_label 'opencode-go')" "provider_label: opencode-go"
 
 # ── provider_list_contains ────────────────────────────────
 
@@ -55,6 +57,9 @@ assert_contains "$out" "CURSOR_COOKIE" "unavailable_message: cursor mentions env
 
 out=$(provider_unavailable_message "copilot")
 assert_contains "$out" "COPILOT_GITHUB_TOKEN" "unavailable_message: copilot mentions env var"
+
+out=$(provider_unavailable_message "opencode-go")
+assert_contains "$out" "OPENCODE_GO_API_KEY" "unavailable_message: opencode-go mentions env var"
 
 # ── CLI: help flags (subprocess) ──────────────────────────
 
@@ -104,7 +109,7 @@ assert_contains     "$err" "Usage:"               "unknown provider: shows usage
 run_named_providers() { return 0; }
 run_all_parallel() { return 0; }
 
-for p in claude codex cursor gemini jetbrains copilot; do
+for p in claude codex cursor gemini jetbrains copilot opencode-go; do
   old_path="$PATH"
   PATH="$test_path"
   err=$(run_from_args "$p" 2>&1); code=$?
