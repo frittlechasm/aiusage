@@ -101,3 +101,41 @@ found=$(
 assert_contains "$found" "AIAssistantQuotaManager2.xml" "jetbrains_quota: finds quota file under fake HOME"
 
 rm -rf "$fake_home"
+
+# ── _cursor_cookie_firefox: WAL-aware snapshot ────────────
+
+if command -v sqlite3 >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+  ff_home=$(mktemp -d)
+  if [[ "$OSTYPE" == darwin* ]]; then
+    prof_root="$ff_home/Library/Application Support/Firefox/Profiles"
+  else
+    prof_root="$ff_home/.mozilla/firefox"
+  fi
+  prof="$prof_root/abc123.default-release"
+  mkdir -p "$prof"
+
+  # Commit the cookie but exit without closing the connection, so the
+  # committed row exists only in cookies.sqlite-wal.
+  python3 - "$prof" <<'PY' || true
+import sqlite3, sys, os
+prof = sys.argv[1]
+conn = sqlite3.connect(prof + "/cookies.sqlite")
+conn.execute("PRAGMA journal_mode=WAL")
+conn.execute("CREATE TABLE moz_cookies(host TEXT, name TEXT, value TEXT)")
+conn.execute("INSERT INTO moz_cookies VALUES ('https://cursor.com','WorkosCursorSessionToken','wal-token')")
+conn.commit()
+assert os.path.exists(prof + "/cookies.sqlite-wal"), "wal file missing after commit"
+os._exit(0)
+PY
+
+  if [[ -f "$prof/cookies.sqlite-wal" ]]; then
+    val=$(HOME="$ff_home" _cursor_cookie_firefox)
+    assert_eq "wal-token" "$val" "cursor_firefox: recovers cookie committed only to WAL"
+  else
+    skip "cursor_firefox: WAL-only cookie recovered" "sqlite checkpointed the WAL on its own"
+  fi
+
+  rm -rf "$ff_home"
+else
+  skip "cursor_firefox: WAL-aware snapshot" "requires sqlite3 and python3"
+fi

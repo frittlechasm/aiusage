@@ -1052,9 +1052,16 @@ _cursor_cookie_firefox() {
     [[ -f "$db" ]] || continue
     tmp=$(mktemp)
     cp "$db" "$tmp" 2>/dev/null || { rm -f "$tmp"; continue; }
+    # Include WAL/SHM companions: browsers keep the databases open, so the
+    # newest committed cookies can live only in the -wal file.
+    for suffix in -wal -shm; do
+      if [[ -f "$db$suffix" ]]; then
+        cp "$db$suffix" "$tmp$suffix" 2>/dev/null || true
+      fi
+    done
     val=$(sqlite3 "$tmp" \
       "SELECT value FROM moz_cookies WHERE host LIKE '%cursor.com%' AND name='WorkosCursorSessionToken' LIMIT 1" 2>/dev/null)
-    rm -f "$tmp"
+    rm -f "$tmp" "$tmp-wal" "$tmp-shm"
     [[ -n "$val" ]] && printf '%s' "$val" && return 0
   done
   return 1
@@ -1151,6 +1158,16 @@ for base_dir, key_service in entries:
             fd, tmp = tempfile.mkstemp()
             os.close(fd)
             shutil.copy2(db, tmp)
+            # Browsers keep the database open, so the newest committed
+            # cookies can live only in the -wal file. Copy companions so
+            # SQLite recovers them when opening the snapshot.
+            for suffix in ('-wal', '-shm'):
+                side = db + suffix
+                if os.path.exists(side):
+                    try:
+                        shutil.copy2(side, tmp + suffix)
+                    except OSError:
+                        pass
             conn = sqlite3.connect(tmp)
             row = conn.execute(
                 "SELECT hex(encrypted_value) FROM cookies "
@@ -1160,8 +1177,11 @@ for base_dir, key_service in entries:
         except Exception:
             continue
         finally:
-            if tmp and os.path.exists(tmp):
-                os.unlink(tmp)
+            if tmp:
+                for suffix in ('', '-wal', '-shm'):
+                    p = tmp + suffix
+                    if os.path.exists(p):
+                        os.unlink(p)
         if not row:
             continue
         val = decrypt(row[0], key_service)
