@@ -1804,6 +1804,21 @@ _opencode_go_auth_source_available() {
   _opencode_go_resolve_key >/dev/null 2>&1
 }
 
+_opencode_go_draw_window() {
+  local label="$1" pct="$2" reset_at="$3" status="$4" mode="${5:-datetime}" note="" reset_epoch
+
+  if [[ "$status" == "rate-limited" ]]; then
+    note="rate limited"
+  fi
+
+  draw_bar "$label" "$pct" "$note"
+
+  reset_epoch=$(normalize_epoch "$reset_at")
+  if [[ -n "$reset_epoch" ]]; then
+    draw_reset "$reset_epoch" "$mode"
+  fi
+}
+
 fetch_opencode_go() {
   local key="" resp status
 
@@ -1840,46 +1855,40 @@ fetch_opencode_go() {
   fi
 
   local usage_values
-  local rolling_pct rolling_reset_at
-  local weekly_pct weekly_reset_at
-  local monthly_pct monthly_reset_at
+  local rolling_pct rolling_reset_at rolling_status
+  local weekly_pct weekly_reset_at weekly_status
+  local monthly_pct monthly_reset_at monthly_status
   usage_values=$(printf '%s' "$resp" | jq -jr '
     (.usage // {}) as $usage |
     [
-      $usage.rolling.percent, $usage.rolling.resetsAt,
-      $usage.weekly.percent, $usage.weekly.resetsAt,
-      $usage.monthly.percent, $usage.monthly.resetsAt
+      $usage.rolling.percent, $usage.rolling.resetsAt, $usage.rolling.status,
+      $usage.weekly.percent, $usage.weekly.resetsAt, $usage.weekly.status,
+      $usage.monthly.percent, $usage.monthly.resetsAt, $usage.monthly.status
     ] |
     map(if . == null then "" else tostring end) |
     join("\u001f")
   ' 2>/dev/null) || true
   IFS=$'\x1f' read -r \
-    rolling_pct rolling_reset_at \
-    weekly_pct weekly_reset_at \
-    monthly_pct monthly_reset_at <<<"$usage_values"
+    rolling_pct rolling_reset_at rolling_status \
+    weekly_pct weekly_reset_at weekly_status \
+    monthly_pct monthly_reset_at monthly_status <<<"$usage_values"
 
-  local rendered=0 reset_epoch
+  local rendered=0
 
   if [[ "$rolling_pct" =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then
-    draw_bar "5h" "$rolling_pct"
-    reset_epoch=$(normalize_epoch "$rolling_reset_at")
-    [[ -n "$reset_epoch" ]] && draw_reset "$reset_epoch" "time"
+    _opencode_go_draw_window "5h" "$rolling_pct" "$rolling_reset_at" "$rolling_status" "time"
     rendered=1
   fi
 
   if [[ "$weekly_pct" =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then
     ((rendered == 1)) && printf "\n"
-    draw_bar "Weekly" "$weekly_pct"
-    reset_epoch=$(normalize_epoch "$weekly_reset_at")
-    [[ -n "$reset_epoch" ]] && draw_reset "$reset_epoch"
+    _opencode_go_draw_window "Weekly" "$weekly_pct" "$weekly_reset_at" "$weekly_status"
     rendered=1
   fi
 
   if [[ "$monthly_pct" =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then
     ((rendered == 1)) && printf "\n"
-    draw_bar "Monthly" "$monthly_pct"
-    reset_epoch=$(normalize_epoch "$monthly_reset_at")
-    [[ -n "$reset_epoch" ]] && draw_reset "$reset_epoch"
+    _opencode_go_draw_window "Monthly" "$monthly_pct" "$monthly_reset_at" "$monthly_status"
     rendered=1
   fi
 

@@ -404,7 +404,7 @@ assert_contains "$request" "Authorization: Bearer fake-key" "fetch_opencode_go r
 assert_contains "$out" "5h" "fetch_opencode_go request: renders response"
 
 # All authoritative windows are rendered, including an explicit zero.
-set_http_response "200" '{"usage":{"rolling":{"percent":12.5,"resetsAt":"2026-09-01T02:00:00Z"},"weekly":{"percent":47,"resetsAt":"2026-09-08T00:00:00Z"},"monthly":{"percent":0,"resetsAt":"2026-10-01T00:00:00Z"}},"useBalance":false}'
+set_http_response "200" '{"usage":{"rolling":{"status":"ok","percent":12.5,"resetsAt":"2026-09-01T02:00:00Z"},"weekly":{"status":"ok","percent":47,"resetsAt":"2026-09-08T00:00:00Z"},"monthly":{"status":"ok","percent":0,"resetsAt":"2026-10-01T00:00:00Z"}},"useBalance":false}'
 out=$(OPENCODE_GO_API_KEY="fake-key" OPENCODE_API_KEY= fetch_opencode_go 2>&1) || true
 assert_contains "$out" "5h"      "fetch_opencode_go 200: shows rolling 5h bar"
 assert_contains "$out" "12%"     "fetch_opencode_go 200: shows rolling usage"
@@ -426,6 +426,27 @@ assert_contains "$out" "31%" "fetch_opencode_go partial: shows monthly usage"
 set_http_response "200" '{"rollingUsage":{"usagePercent":9,"resetInSec":1200}}'
 out=$(OPENCODE_GO_API_KEY="fake-key" OPENCODE_API_KEY= fetch_opencode_go 2>&1) || true
 assert_contains "$out" "usage data is unavailable" "fetch_opencode_go legacy shape: ignored"
+
+# A rate-limited window still shows its percent, with the state surfaced.
+set_http_response "200" '{"usage":{"rolling":{"status":"rate-limited","percent":100,"resetsAt":"2026-09-01T02:00:00Z"},"weekly":{"status":"ok","percent":10,"resetsAt":"2026-09-08T00:00:00Z"}}}'
+out=$(OPENCODE_GO_API_KEY="fake-key" OPENCODE_API_KEY= fetch_opencode_go 2>&1) || true
+assert_contains "$out" "5h" "fetch_opencode_go rate-limited: keeps rolling window"
+assert_contains "$out" "100%" "fetch_opencode_go rate-limited: shows rolling usage"
+assert_contains "$out" "rate limited" "fetch_opencode_go rate-limited: surfaces the status"
+weekly_line=$(printf '%s\n' "$out" | grep "Weekly")
+assert_contains "$weekly_line" "Weekly" "fetch_opencode_go rate-limited: weekly window present"
+assert_not_contains "$weekly_line" "rate limited" "fetch_opencode_go rate-limited: ok windows stay unannotated"
+
+# A window without a usable reset does not abort the remaining windows.
+# Runs under explicit errexit because production invokes fetches with set -e.
+set_http_response "200" '{"usage":{"rolling":{"status":"ok","percent":5},"weekly":{"status":"ok","percent":10,"resetsAt":"2026-09-08T00:00:00Z"}}}'
+out=$(
+  set -e
+  OPENCODE_GO_API_KEY="fake-key" OPENCODE_API_KEY= fetch_opencode_go 2>&1
+) || true
+assert_contains "$out" "5h" "fetch_opencode_go missing reset: keeps rolling window"
+assert_contains "$out" "Weekly" "fetch_opencode_go missing reset: later windows still render"
+assert_not_contains "$out" "reset: --" "fetch_opencode_go missing reset: omits unknown reset line"
 
 # Authentication, network, and response-shape errors are distinct.
 # 401 with a key from the environment points at the environment variable.
