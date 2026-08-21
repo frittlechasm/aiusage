@@ -451,6 +451,11 @@ set_http_response "000" ""
 out=$(OPENCODE_GO_API_KEY="fake-key" OPENCODE_API_KEY= fetch_opencode_go 2>&1) || true
 assert_contains "$out" "network error" "fetch_opencode_go 000: network error message"
 
+set_http_response "200" ''
+out=$(OPENCODE_GO_API_KEY="fake-key" OPENCODE_API_KEY= fetch_opencode_go 2>&1) || true
+assert_contains "$out" "usage data is unavailable" "fetch_opencode_go empty 200: unavailable, not HTTP failure"
+assert_not_contains "$out" "HTTP 200" "fetch_opencode_go empty 200: no contradictory status message"
+
 set_http_response "200" '{"unexpected":true}'
 out=$(OPENCODE_GO_API_KEY="fake-key" OPENCODE_API_KEY= fetch_opencode_go 2>&1) || true
 assert_contains "$out" "usage data is unavailable" "fetch_opencode_go malformed 200: response-shape error"
