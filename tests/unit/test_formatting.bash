@@ -69,14 +69,3 @@ assert_eq ""           "$(normalize_epoch '')"               "normalize_epoch: e
 # Threshold: strictly > 100_000_000_000 is treated as milliseconds (not >=)
 assert_eq "100000000000" "$(normalize_epoch '100000000000')" "normalize_epoch: exactly at threshold (not converted)"
 assert_eq "100000000"    "$(normalize_epoch '100000000001')" "normalize_epoch: just above threshold → ms→s"
-
-# ── relative_reset_epoch ──────────────────────────────
-
-assert_eq "4600" "$(relative_reset_epoch '3600' '1000')" "relative_reset_epoch: adds seconds"
-assert_eq "1000" "$(relative_reset_epoch '0' '1000')"    "relative_reset_epoch: preserves zero"
-assert_eq ""     "$(relative_reset_epoch 'invalid' '1000')" "relative_reset_epoch: rejects invalid seconds"
-assert_eq ""     "$(relative_reset_epoch '3600' 'invalid')" "relative_reset_epoch: rejects invalid current time"
-
-assert_eq "2000" "$(usage_reset_epoch '2000' '3600' '1000')" "usage_reset_epoch: prefers absolute reset"
-assert_eq "4600" "$(usage_reset_epoch '' '3600' '1000')"     "usage_reset_epoch: falls back to relative reset"
-assert_eq "4600" "$(usage_reset_epoch 'invalid' '3600' '1000')" "usage_reset_epoch: invalid absolute reset falls back"

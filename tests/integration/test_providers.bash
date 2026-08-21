@@ -414,13 +414,18 @@ assert_contains "$out" "Monthly" "fetch_opencode_go 200: shows monthly bar"
 assert_contains "$out" "0%"      "fetch_opencode_go 200: preserves zero usage"
 assert_not_contains "$out" "reset: --" "fetch_opencode_go 200: renders API reset timestamps"
 
-# The older dashboard field shape remains compatible, and optional windows stay aligned.
-set_http_response "200" '{"rollingUsage":{"usagePercent":9,"resetInSec":1200},"monthlyUsage":{"usagePercent":31,"resetInSec":86400}}'
+# Optional windows stay aligned: a missing window is omitted, not padded.
+set_http_response "200" '{"usage":{"rolling":{"percent":9,"resetsAt":"2026-09-01T02:00:00Z"},"monthly":{"percent":31,"resetsAt":"2026-10-01T00:00:00Z"}}}'
 out=$(OPENCODE_GO_API_KEY="fake-key" OPENCODE_API_KEY= fetch_opencode_go 2>&1) || true
 assert_contains "$out" "5h" "fetch_opencode_go partial: keeps rolling window"
 assert_not_contains "$out" "Weekly" "fetch_opencode_go partial: omits missing weekly window"
 assert_contains "$out" "Monthly" "fetch_opencode_go partial: keeps monthly window aligned"
 assert_contains "$out" "31%" "fetch_opencode_go partial: shows monthly usage"
+
+# Undocumented response shapes are ignored rather than guessed at.
+set_http_response "200" '{"rollingUsage":{"usagePercent":9,"resetInSec":1200}}'
+out=$(OPENCODE_GO_API_KEY="fake-key" OPENCODE_API_KEY= fetch_opencode_go 2>&1) || true
+assert_contains "$out" "usage data is unavailable" "fetch_opencode_go legacy shape: ignored"
 
 # Authentication, network, and response-shape errors are distinct.
 # 401 with a key from the environment points at the environment variable.
