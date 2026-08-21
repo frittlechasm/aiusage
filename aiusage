@@ -259,32 +259,23 @@ http_json() {
   local url="$1" body="$2"
   shift 2
 
-  local tmp_body headers_file body_file="" status
+  # Headers and body are passed as curl arguments instead of temp files:
+  # they carry bearer tokens and session cookies, which must not touch
+  # disk where a signal or crash mid-request would leave them behind.
+  local tmp_body status curl_args=(-s --max-time 10 -w "%{http_code}") h
+  for h in "$@"; do
+    curl_args+=(-H "$h")
+  done
+  [[ -n "$body" ]] && curl_args+=(--data-binary "$body")
+
   tmp_body=$(mktemp)
-  headers_file=$(mktemp)
-  chmod 600 "$headers_file" 2>/dev/null || true
-
-  if (($# > 0)); then
-    printf '%s\n' "$@" >"$headers_file"
-  fi
-
-  if [[ -n "$body" ]]; then
-    body_file=$(mktemp)
-    chmod 600 "$body_file" 2>/dev/null || true
-    printf '%s' "$body" >"$body_file"
-  fi
-
-  local curl_args=(-s --max-time 10 -w "%{http_code}" -o "$tmp_body")
-  [[ -s "$headers_file" ]] && curl_args+=(-H "@$headers_file")
-  [[ -n "$body_file" ]] && curl_args+=(--data-binary "@$body_file")
-
-  if ! status=$(curl "${curl_args[@]}" "$url" 2>/dev/null); then
+  if ! status=$(curl "${curl_args[@]}" -o "$tmp_body" "$url" 2>/dev/null); then
     status="000"
   fi
   [[ "$status" =~ ^[0-9]{3}$ ]] || status="000"
   HTTP_STATUS="$status"
   HTTP_BODY=$(<"$tmp_body")
-  rm -f "$tmp_body" "$headers_file" "$body_file"
+  rm -f "$tmp_body"
 }
 
 draw_http_error() {
