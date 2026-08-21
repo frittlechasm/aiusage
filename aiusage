@@ -1847,7 +1847,14 @@ fetch_opencode_go() {
 
   if [[ "$status" != 2* ]] || [[ -z "$resp" ]]; then
     case "$status" in
-    401 | 403) draw_error "OpenCode Go API key is invalid — run: opencode auth login" ;;
+    401)
+      if [[ -n "${OPENCODE_GO_API_KEY:-}" || -n "${OPENCODE_API_KEY:-}" ]]; then
+        draw_error "OpenCode Go API key is invalid — check OPENCODE_GO_API_KEY or OPENCODE_API_KEY"
+      else
+        draw_error "OpenCode Go API key is invalid — run: opencode auth login"
+      fi
+      ;;
+    403) draw_error "this key has no OpenCode Go subscription — see opencode.ai/zen/go" ;;
     *) draw_http_error "$status" "OpenCode Go authentication failed" ;;
     esac
     return

@@ -423,13 +423,24 @@ assert_contains "$out" "Monthly" "fetch_opencode_go partial: keeps monthly windo
 assert_contains "$out" "31%" "fetch_opencode_go partial: shows monthly usage"
 
 # Authentication, network, and response-shape errors are distinct.
+# 401 with a key from the environment points at the environment variable.
 set_http_response "401" ""
 out=$(OPENCODE_GO_API_KEY="expired-key" OPENCODE_API_KEY= fetch_opencode_go 2>&1) || true
 assert_contains "$out" "API key is invalid" "fetch_opencode_go 401: invalid key message"
+assert_contains "$out" "OPENCODE_GO_API_KEY" "fetch_opencode_go 401 env key: names the environment variable"
+
+# 401 with no environment key points at opencode auth login.
+_tmp=$(make_tmp_home)
+mkdir -p "$_tmp/.local/share/opencode"
+printf '{"opencode-go":{"type":"api","key":"file-key"}}' >"$_tmp/.local/share/opencode/auth.json"
+out=$(HOME="$_tmp" XDG_DATA_HOME= OPENCODE_GO_API_KEY= OPENCODE_API_KEY= fetch_opencode_go 2>&1) || true
+rm -rf "$_tmp"
+assert_contains "$out" "API key is invalid" "fetch_opencode_go 401 file key: invalid key message"
+assert_contains "$out" "opencode auth login" "fetch_opencode_go 401 file key: names re-login"
 
 set_http_response "403" ""
 out=$(OPENCODE_GO_API_KEY="fake-key" OPENCODE_API_KEY= fetch_opencode_go 2>&1) || true
-assert_contains "$out" "API key is invalid" "fetch_opencode_go 403: invalid key message"
+assert_contains "$out" "no OpenCode Go subscription" "fetch_opencode_go 403: subscription message"
 
 set_http_response "000" ""
 out=$(OPENCODE_GO_API_KEY="fake-key" OPENCODE_API_KEY= fetch_opencode_go 2>&1) || true
