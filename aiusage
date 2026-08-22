@@ -2104,10 +2104,12 @@ run_from_args() {
 
 # Only run the CLI entry point when executed directly, not when sourced by tests.
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-  # Capture the exit status explicitly: under set -e a failing run_from_args
-  # would exit before the trailing newline below.
-  exit_code=0
-  run_from_args "$@" || exit_code=$?
+  # Print the trailing newline via an EXIT trap so set -e exits (error
+  # paths) keep it. Do NOT wrap run_from_args in `cmd || rc=$?`: putting a
+  # function call in an || list disables errexit inside everything it
+  # calls, including the background provider workers.
+  trap 'printf "\n"' EXIT
+  run_from_args "$@"
+  trap - EXIT
   printf "\n"
-  exit "$exit_code"
 fi

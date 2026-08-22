@@ -93,6 +93,9 @@ out=$(env PATH="/bin" /bin/bash "$AIUSAGE_SCRIPT" claude 2>&1); code=$?
 assert_eq "1" "$code" "missing deps: exits 1"
 assert_contains "$out" "missing required dependencies" "missing deps: reports dependency error"
 assert_contains "$out" "Install missing dependencies" "missing deps: prints install hint"
+# Strict mode must stay active inside run_from_args: a failed dependency
+# check aborts instead of falling through to provider detection.
+assert_not_contains "$out" "claude is not installed" "missing deps: errexit stops before provider handling"
 
 # ── CLI: unknown provider (subprocess) ────────────────────
 
