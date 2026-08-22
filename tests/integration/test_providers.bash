@@ -439,11 +439,13 @@ assert_not_contains "$weekly_line" "rate limited" "fetch_opencode_go rate-limite
 
 # A window without a usable reset does not abort the remaining windows.
 # Runs under explicit errexit because production invokes fetches with set -e.
+# No '|| true' here: it would put the substitution in an errexit-ignored
+# context, making the inner 'set -e' inert on bash >= 4.4.
 set_http_response "200" '{"usage":{"rolling":{"status":"ok","percent":5},"weekly":{"status":"ok","percent":10,"resetsAt":"2026-09-08T00:00:00Z"}}}'
 out=$(
   set -e
   OPENCODE_GO_API_KEY="fake-key" OPENCODE_API_KEY= fetch_opencode_go 2>&1
-) || true
+)
 assert_contains "$out" "5h" "fetch_opencode_go missing reset: keeps rolling window"
 assert_contains "$out" "Weekly" "fetch_opencode_go missing reset: later windows still render"
 assert_not_contains "$out" "reset: --" "fetch_opencode_go missing reset: omits unknown reset line"
