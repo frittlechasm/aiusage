@@ -154,6 +154,21 @@ out=$(
 )
 assert_contains "$out" "boom"                "wait loop: worker stderr lands in section"
 
+# Full fetch lifecycle under strict mode: cleanup after the wait loop must
+# tolerate the emptied PID list (empty array expansion errors on bash < 4.4).
+out=$(
+  set -eu
+  tmp=$(mktemp)
+  ( exit 0 ) & pid=$!
+  WAIT_LABELS=("Tidy")
+  WAIT_TMPS=("$tmp")
+  WAIT_PIDS=("$pid")
+  wait_and_render_fetches
+  cleanup_running_fetches
+  printf "CLEAN\n"
+)
+assert_contains "$out" "CLEAN" "wait loop: cleanup survives emptied PID list under set -u"
+
 # ── spinner_frame ─────────────────────────────────────────
 # SPINNER_FRAMES=('|' '/' '-' '\')
 
