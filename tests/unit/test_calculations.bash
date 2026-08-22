@@ -39,6 +39,9 @@ assert_eq "9"    "$(numeric_or abc 9)"        "numeric_or: garbage uses fallback
 assert_eq "9"    "$(numeric_or '' 9)"         "numeric_or: empty uses fallback"
 assert_eq "0"    "$(numeric_or 'null')"       "numeric_or: null uses default fallback (0)"
 assert_eq ""     "$(numeric_or abc '')"       "numeric_or: empty fallback stays empty"
+assert_eq "8"    "$(numeric_or 08 9)"         "numeric_or: leading zeros stripped (octal-safe)"
+assert_eq "-9.5" "$(numeric_or -09.5 9)"      "numeric_or: leading zeros stripped on negatives"
+assert_eq "0"    "$(numeric_or 00 9)"         "numeric_or: bare zero stays zero"
 
 # ── percent_remaining_of ──────────────────────────────────
 

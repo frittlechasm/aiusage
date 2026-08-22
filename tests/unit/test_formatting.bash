@@ -69,3 +69,21 @@ assert_eq ""           "$(normalize_epoch '')"               "normalize_epoch: e
 # Threshold: strictly > 100_000_000_000 is treated as milliseconds (not >=)
 assert_eq "100000000000" "$(normalize_epoch '100000000000')" "normalize_epoch: exactly at threshold (not converted)"
 assert_eq "100000000"    "$(normalize_epoch '100000000001')" "normalize_epoch: just above threshold → ms→s"
+
+# ── leading-zero values (bash would read them as octal) ───
+
+assert_eq "0m"   "$(codex_window_label '09' 'fallback')"     "codex_window_label: leading zero does not crash"
+assert_eq "time" "$(codex_window_reset_mode '08')"           "codex_window_reset_mode: leading zero does not crash"
+assert_eq "8h"   "$(duration_to_label 'PT08H')"              "duration_to_label: leading zero hours"
+assert_eq "3d"   "$(duration_to_label 'P03D')"               "duration_to_label: leading zero days"
+assert_eq "9"    "$(normalize_epoch '09')"                   "normalize_epoch: leading zero epoch"
+assert_eq "9"    "$(normalize_epoch '09.5')"                 "normalize_epoch: leading zero float"
+
+out=$(
+  set -euo pipefail
+  draw_bar "5h" "08" >/dev/null
+  draw_bar "5h" "0.4" >/dev/null
+  format_remaining "$((3600))" >/dev/null
+  printf "OK\n"
+)
+assert_contains "$out" "OK" "leading zeros: strict-mode rendering survives octal-looking values"
