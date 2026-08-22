@@ -1923,11 +1923,12 @@ _opencode_go_resolve_key() {
   auth_file="${XDG_DATA_HOME:-$HOME/.local/share}/opencode/auth.json"
   [[ -f "$auth_file" ]] || return 1
 
+  # `opencode auth login` stores the API key under the "opencode" provider
+  # id; accept a dedicated "opencode-go" entry first, then the generic one.
   key=$(jq -r '
-    .["opencode-go"] |
-    objects |
-    select(.type == "api" and (.key | type) == "string") |
-    .key // empty
+    [(.["opencode-go"] // empty), (.["opencode"] // empty)] |
+    map(select(.type == "api" and (.key | type) == "string")) |
+    first | .key // empty
   ' "$auth_file" 2>/dev/null) || true
   [[ -n "$key" ]] || return 1
 

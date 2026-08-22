@@ -394,6 +394,19 @@ key=$(HOME="$_tmp" XDG_DATA_HOME="$_tmp/xdg" OPENCODE_GO_API_KEY= OPENCODE_API_K
 rm -rf "$_tmp"
 assert_eq "xdg-key" "$key" "opencode-go auth: respects XDG_DATA_HOME"
 
+# `opencode auth login` stores the API key under the "opencode" provider id.
+_tmp=$(make_tmp_home)
+mkdir -p "$_tmp/.local/share/opencode"
+printf '{"anthropic":{"type":"oauth"},"opencode":{"type":"api","key":"login-key"}}' >"$_tmp/.local/share/opencode/auth.json"
+key=$(HOME="$_tmp" XDG_DATA_HOME= OPENCODE_GO_API_KEY= OPENCODE_API_KEY= _opencode_go_resolve_key)
+assert_eq "login-key" "$key" "opencode-go auth: reads the generic opencode login entry"
+
+# A dedicated opencode-go entry wins over the generic one.
+printf '{"opencode-go":{"type":"api","key":"go-key"},"opencode":{"type":"api","key":"login-key"}}' >"$_tmp/.local/share/opencode/auth.json"
+key=$(HOME="$_tmp" XDG_DATA_HOME= OPENCODE_GO_API_KEY= OPENCODE_API_KEY= _opencode_go_resolve_key)
+rm -rf "$_tmp"
+assert_eq "go-key" "$key" "opencode-go auth: dedicated entry takes precedence over login entry"
+
 # The provider-specific environment variable wins over the official shared name.
 key=$(OPENCODE_GO_API_KEY="specific-key" OPENCODE_API_KEY="shared-key" _opencode_go_resolve_key)
 assert_eq "specific-key" "$key" "opencode-go auth: provider-specific env key takes precedence"
