@@ -795,7 +795,14 @@ run_named_providers() {
     done
   fi
 
-  (( ${#selected[@]} > 0 ))
+  # Report status through a global instead of the return value: callers must
+  # not invoke this function inside `if !` or `||` contexts, which would
+  # suppress errexit here and in every spawned worker.
+  if (( ${#selected[@]} > 0 )); then
+    NAMED_PROVIDERS_RC=0
+  else
+    NAMED_PROVIDERS_RC=1
+  fi
 }
 
 run_all_parallel() {
@@ -2065,7 +2072,7 @@ EOF
 }
 
 run_from_args() {
-  local requested=() arg exit_code=0
+  local requested=() arg
   local run_all=0
 
   if (($# == 0)); then
@@ -2073,7 +2080,6 @@ run_from_args() {
     run_all_parallel
     return
   fi
-
   for arg in "$@"; do
     case "$arg" in
     -h | --help | help)
@@ -2108,11 +2114,9 @@ run_from_args() {
   fi
 
   check_required_dependencies
-  if ! run_named_providers "${requested[@]}"; then
-    exit_code=1
-  fi
-
-  return "$exit_code"
+  NAMED_PROVIDERS_RC=0
+  run_named_providers "${requested[@]}"
+  return "$NAMED_PROVIDERS_RC"
 }
 
 # Only run the CLI entry point when executed directly, not when sourced by tests.
