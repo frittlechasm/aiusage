@@ -80,7 +80,7 @@ assert_contains "$out" "Usage:" "help: shows usage header"
 
 out=$(env PATH="$test_path" bash "$AIUSAGE_SCRIPT" --version 2>&1); code=$?
 assert_eq "0" "$code" "--version: exits 0"
-assert_eq "aiusage 0.1.4" "$out" "--version: prints release version"
+assert_eq "aiusage 0.1.5" "$out" "--version: prints release version"
 
 # An exported test-only environment variable must not disable normal CLI execution.
 out=$(env PATH="$test_path" AIUSAGE_SOURCED=1 bash "$AIUSAGE_SCRIPT" --help 2>&1); code=$?
