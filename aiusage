@@ -752,9 +752,11 @@ start_provider_fetches() {
 run_fetches_with_loading() {
   start_provider_fetches "$@"
 
-  trap 'cleanup_running_fetches; trap - INT;  kill -INT  $$' INT
-  trap 'cleanup_running_fetches; trap - TERM; kill -TERM $$' TERM
-  trap 'cleanup_running_fetches' EXIT
+  # These handlers replace the entry-point EXIT trap, so they must also
+  # print the trailing newline it promises.
+  trap 'cleanup_running_fetches; printf "\n"; trap - INT;  kill -INT  $$' INT
+  trap 'cleanup_running_fetches; printf "\n"; trap - TERM; kill -TERM $$' TERM
+  trap 'cleanup_running_fetches; printf "\n"' EXIT
 
   wait_and_render_fetches
   cleanup_running_fetches
