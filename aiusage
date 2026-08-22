@@ -1931,12 +1931,20 @@ fetch_copilot() {
     return
   fi
 
-  local plan sku token_based
+  local plan sku token_based premium_snapshot
   plan=$(printf '%s' "$resp" | jq -r '.copilot_plan // ""' 2>/dev/null)
   sku=$(printf '%s' "$resp" | jq -r '.access_type_sku // ""' 2>/dev/null)
-  token_based=$(printf '%s' "$resp" | jq -r '
-    (.quota_snapshots.premium_models // .quota_snapshots.premium_interactions // {}) as $premium |
-    (.token_based_billing // $premium.token_based_billing // false) | tostring
+  premium_snapshot=$(printf '%s' "$resp" | jq -c '
+    def populated_object: type == "object" and length > 0;
+    (.quota_snapshots // {}) as $snapshots |
+    if ($snapshots.premium_interactions | populated_object) then $snapshots.premium_interactions
+    elif ($snapshots.premium_models | populated_object) then $snapshots.premium_models
+    else {} end
+  ' 2>/dev/null)
+  [[ -n "$premium_snapshot" ]] || premium_snapshot='{}'
+  token_based=$(printf '%s' "$resp" | jq -r --argjson premium "$premium_snapshot" '
+    (if (.token_based_billing | type) == "boolean" then .token_based_billing
+     else ($premium.token_based_billing // false) end) | tostring
   ' 2>/dev/null)
 
   # ── Step 1: try quota_snapshots ───────────────────────────────────────────
@@ -1945,13 +1953,12 @@ fetch_copilot() {
   local premium_pct premium_ent premium_used chat_pct completions_pct
   local qs_p_pct qs_p_ent qs_p_rem qs_p_used
   local qs_c_pct qs_c_ent qs_c_rem qs_comp_pct qs_comp_ent qs_comp_rem
-  qs_p_pct=$(printf '%s' "$resp" | jq -r '((.quota_snapshots.premium_models // .quota_snapshots.premium_interactions) | if . == null or .unlimited == true then "" else (.percent_remaining // "") end)' 2>/dev/null)
-  qs_p_ent=$(printf '%s' "$resp" | jq -r '((.quota_snapshots.premium_models // .quota_snapshots.premium_interactions) | if . == null or .unlimited == true then "" else (.entitlement // "") end)' 2>/dev/null)
-  qs_p_rem=$(printf '%s' "$resp" | jq -r '((.quota_snapshots.premium_models // .quota_snapshots.premium_interactions) | if . == null or .unlimited == true then "" else (.quota_remaining // .remaining // "") end)' 2>/dev/null)
-  qs_p_used=$(printf '%s' "$resp" | jq -r '
+  qs_p_pct=$(printf '%s' "$premium_snapshot" | jq -r 'if .unlimited == true then "" else (.percent_remaining // "") end' 2>/dev/null)
+  qs_p_ent=$(printf '%s' "$premium_snapshot" | jq -r 'if .unlimited == true then "" else (.entitlement // "") end' 2>/dev/null)
+  qs_p_rem=$(printf '%s' "$premium_snapshot" | jq -r 'if .unlimited == true then "" else (.quota_remaining // .remaining // "") end' 2>/dev/null)
+  qs_p_used=$(printf '%s' "$premium_snapshot" | jq -r '
     def clean_credits: (. * 100 | round / 100);
-    (.quota_snapshots.premium_models // .quota_snapshots.premium_interactions) |
-    if . == null or .unlimited == true or (.entitlement | type) != "number" then ""
+    if .unlimited == true or (.entitlement | type) != "number" then ""
     elif ((.overage_count // 0) | type) == "number" and (.overage_count // 0) > 0
       then (([.entitlement - ([.quota_remaining // 0, 0] | max), 0] | max) + .overage_count | clean_credits)
     elif ((.quota_remaining // .remaining) | type) == "number"
@@ -2003,8 +2010,7 @@ fetch_copilot() {
   fi
 
   local reset_info reset_tag reset_date reset_epoch
-  reset_info=$(printf '%s' "$resp" | jq -r '
-    (.quota_snapshots.premium_models // .quota_snapshots.premium_interactions // {}) as $premium |
+  reset_info=$(printf '%s' "$resp" | jq -r --argjson premium "$premium_snapshot" '
     [["utc", .quota_reset_date_utc], ["local", .quota_reset_date],
      ["utc", $premium.quota_reset_at], ["utc", $premium.reset_date],
      ["local", .limited_user_reset_date]] |

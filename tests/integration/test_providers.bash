@@ -411,6 +411,26 @@ out=$(fetch_copilot 2>&1) || true
 assert_contains "$out" "12.6 / 300 credits"   "fetch_copilot credits: formats fractional consumption"
 assert_not_contains "$out" "12.600000000000"  "fetch_copilot credits: hides floating-point artifacts"
 
+# An empty legacy premium_models object must not shadow premium_interactions.
+set_http_response "200" '{"copilot_plan":"copilot_pro","quota_snapshots":{"premium_models":{},"premium_interactions":{"token_based_billing":true,"entitlement":1500,"quota_remaining":1125,"percent_remaining":75,"unlimited":false}}}'
+out=$(fetch_copilot 2>&1) || true
+assert_contains "$out" "AI Credits" "fetch_copilot snapshot selection: skips empty premium_models"
+assert_contains "$out" "25%" "fetch_copilot snapshot selection: reads premium_interactions usage"
+assert_contains "$out" "375 / 1500 credits" "fetch_copilot snapshot selection: reads premium_interactions credits"
+
+# When both snapshots contain data, premium_interactions is authoritative.
+set_http_response "200" '{"copilot_plan":"copilot_pro","quota_snapshots":{"premium_models":{"token_based_billing":false,"entitlement":100,"quota_remaining":90,"percent_remaining":90,"unlimited":false},"premium_interactions":{"token_based_billing":true,"entitlement":500,"quota_remaining":300,"percent_remaining":60,"unlimited":false}}}'
+out=$(fetch_copilot 2>&1) || true
+assert_contains "$out" "AI Credits" "fetch_copilot snapshot selection: prefers premium_interactions billing mode"
+assert_contains "$out" "40%" "fetch_copilot snapshot selection: prefers premium_interactions percentage"
+assert_contains "$out" "200 / 500 credits" "fetch_copilot snapshot selection: prefers premium_interactions amounts"
+
+# An explicit root billing mode takes precedence over the selected snapshot.
+set_http_response "200" '{"copilot_plan":"copilot_pro","token_based_billing":false,"quota_snapshots":{"premium_interactions":{"token_based_billing":true,"percent_remaining":60,"unlimited":false}}}'
+out=$(fetch_copilot 2>&1) || true
+assert_contains "$out" "Premium" "fetch_copilot billing mode: preserves explicit root false"
+assert_not_contains "$out" "AI Credits" "fetch_copilot billing mode: ignores snapshot true when root is false"
+
 # Some clients expose the credits quota as premium_models with a snapshot flag.
 set_http_response "200" '{"copilot_plan":"copilot_pro_plus","quota_reset_date_utc":"","quota_snapshots":{"premium_models":{"token_based_billing":true,"entitlement":7000,"quota_remaining":5250,"remaining":5250,"percent_remaining":75,"unlimited":false,"overage_count":0,"quota_reset_at":1785542400}}}'
 out=$(fetch_copilot 2>&1) || true
