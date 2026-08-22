@@ -142,6 +142,20 @@ out=$(
 assert_contains "$out" "Broken"              "wait loop: failed worker still shows heading"
 assert_contains "$out" "provider check failed" "wait loop: failed worker renders error line"
 
+# A worker that renders output and then crashes must not look successful.
+out=$(
+  set -e
+  tmp=$(mktemp)
+  ( echo "5h ██ 42%"; exit 3 ) >"$tmp" & pid=$!
+  WAIT_LABELS=("Partial")
+  WAIT_TMPS=("$tmp")
+  WAIT_PIDS=("$pid")
+  wait_and_render_fetches
+  rm -f "$tmp"
+)
+assert_contains "$out" "42%"                 "wait loop: partial worker keeps its output"
+assert_contains "$out" "provider check failed" "wait loop: partial worker flagged as failed"
+
 # Worker stderr is captured into its section, not written over the spinner.
 out=$(
   tmp=$(mktemp)

@@ -603,14 +603,13 @@ render_provider_section() {
 
   if ((done)); then
     render_heading_line "$label"
-    local printed=0 line
+    local line
     while IFS= read -r line || [[ -n "$line" ]]; do
       render_line "$line"
-      printed=1
     done <"$tmp_file"
-    # A worker that crashed under strict mode leaves an empty section;
-    # say so instead of rendering a silently missing provider.
-    if ((printed == 0 && status != 0)); then
+    # A nonzero worker status means a crash or partial render, even if the
+    # section already produced output; say so instead of looking successful.
+    if ((status != 0)); then
       render_line "$(draw_error "provider check failed")"
     fi
   else
