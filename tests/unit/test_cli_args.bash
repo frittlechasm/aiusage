@@ -104,6 +104,14 @@ assert_contains     "$err" "Unknown provider"     "unknown provider: error messa
 assert_contains     "$err" "notaprovider"         "unknown provider: names the bad provider"
 assert_contains     "$err" "Usage:"               "unknown provider: shows usage hint"
 
+# Error paths still end with the trailing newline the success path prints.
+out_file="$tmp_root/out.txt"
+env PATH="$test_path" bash "$AIUSAGE_SCRIPT" notaprovider >"$out_file" 2>&1 || true
+assert_eq "1" "$(tail -c 1 "$out_file" | wc -l | tr -d ' ')" "unknown provider: output ends with newline"
+
+env PATH="$test_path" bash "$AIUSAGE_SCRIPT" --help >"$out_file" 2>&1
+assert_eq "1" "$(tail -c 1 "$out_file" | wc -l | tr -d ' ')" "--help: output ends with newline"
+
 # ── CLI: known providers parse without hitting provider backends ──
 
 run_named_providers() { return 0; }

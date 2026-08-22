@@ -118,12 +118,14 @@ out=$(
   WAIT_PIDS=("$pending_pid")
   wait_and_render_fetches
   printf "COMPLETED\n"
+  printf "PIDS_LEFT=%d\n" "${#WAIT_PIDS[@]}"
   rm -f "$tmp_done" "$tmp_pending"
 )
 assert_contains "$out" "COMPLETED"   "wait loop: survives first completion under set -e"
 assert_contains "$out" "Done"        "wait loop: renders completed section"
 assert_contains "$out" "done line"   "wait loop: renders worker output"
 assert_contains "$out" "Pending"     "wait loop: renders pending section"
+assert_contains "$out" "PIDS_LEFT=0" "wait loop: reaped PIDs dropped after wait"
 
 # A worker that crashes under strict mode must render a failure line
 # instead of a silently empty section.

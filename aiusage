@@ -685,6 +685,9 @@ wait_and_render_fetches() {
       WAIT_STATUS[$pid_index]=$?
     fi
   done
+  # Workers are reaped; drop the PIDs so later cleanup cannot SIGTERM a
+  # recycled PID belonging to an unrelated process.
+  WAIT_PIDS=()
 
   if [[ -t 1 ]]; then
     printf "\r\033[2K"
@@ -2098,6 +2101,10 @@ run_from_args() {
 
 # Only run the CLI entry point when executed directly, not when sourced by tests.
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-  run_from_args "$@"
+  # Capture the exit status explicitly: under set -e a failing run_from_args
+  # would exit before the trailing newline below.
+  exit_code=0
+  run_from_args "$@" || exit_code=$?
   printf "\n"
+  exit "$exit_code"
 fi
