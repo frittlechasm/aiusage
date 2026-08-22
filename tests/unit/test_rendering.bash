@@ -125,6 +125,33 @@ assert_contains "$out" "Done"        "wait loop: renders completed section"
 assert_contains "$out" "done line"   "wait loop: renders worker output"
 assert_contains "$out" "Pending"     "wait loop: renders pending section"
 
+# A worker that crashes under strict mode must render a failure line
+# instead of a silently empty section.
+out=$(
+  set -e
+  tmp=$(mktemp)
+  ( exit 3 ) & pid=$!
+  WAIT_LABELS=("Broken")
+  WAIT_TMPS=("$tmp")
+  WAIT_PIDS=("$pid")
+  wait_and_render_fetches
+  rm -f "$tmp"
+)
+assert_contains "$out" "Broken"              "wait loop: failed worker still shows heading"
+assert_contains "$out" "provider check failed" "wait loop: failed worker renders error line"
+
+# Worker stderr is captured into its section, not written over the spinner.
+out=$(
+  tmp=$(mktemp)
+  ( echo "boom" >&2 ) >"$tmp" 2>&1 & pid=$!
+  WAIT_LABELS=("Noisy")
+  WAIT_TMPS=("$tmp")
+  WAIT_PIDS=("$pid")
+  wait_and_render_fetches
+  rm -f "$tmp"
+)
+assert_contains "$out" "boom"                "wait loop: worker stderr lands in section"
+
 # ── spinner_frame ─────────────────────────────────────────
 # SPINNER_FRAMES=('|' '/' '-' '\')
 
