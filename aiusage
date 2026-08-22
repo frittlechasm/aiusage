@@ -30,14 +30,21 @@ fi
 # Every API-derived value must pass through this before it reaches bash
 # arithmetic, an interpolated awk program, or draw_* helpers: bash evaluates
 # variable contents as expressions and awk splices them as program text.
-numeric_or() {
-  local value="${1:-}" fallback="${2-0}"
-  [[ "$value" =~ ^-?[0-9]+([.][0-9]+)?$ ]] || value="$fallback"
-  # Strip leading zeros: bash reads them as octal and aborts on 08/09
-  # ("value too great for base").
+# Remove leading zeros so bash never reads a value as octal ("value too
+# great for base"). Pure text handling: arbitrarily large values pass
+# through unchanged.
+strip_leading_zeros() {
+  local value="$1"
   while [[ "$value" == 0[0-9]* || "$value" == -0[0-9]* ]]; do
     value="${value/0}"
   done
+  printf '%s' "$value"
+}
+
+numeric_or() {
+  local value="${1:-}" fallback="${2-0}"
+  [[ "$value" =~ ^-?[0-9]+([.][0-9]+)?$ ]] || value="$fallback"
+  value=$(strip_leading_zeros "$value")
   printf '%s' "$value"
 }
 
@@ -426,7 +433,8 @@ duration_to_label() {
   fi
 
   if [[ "$duration" =~ ^P([0-9]+)D$ ]]; then
-    printf "%sd" "$((10#${BASH_REMATCH[1]}))"
+    # Text-only: no arithmetic, so huge values render unchanged.
+    printf "%sd" "$(strip_leading_zeros "${BASH_REMATCH[1]}")"
     return 0
   fi
 
