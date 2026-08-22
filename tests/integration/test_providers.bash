@@ -224,6 +224,78 @@ unset CURSOR_COOKIE
 assert_contains "$out" "Monthly" "fetch_cursor 200: shows Monthly bar"
 assert_contains "$out" "35%"     "fetch_cursor 200: shows 35%"
 
+# Current plans expose separate Cursor and other-model pools.
+set_http_response "200" '{"individualUsage":{"plan":{"autoPercentUsed":12,"apiPercentUsed":47,"totalPercentUsed":50}},"billingCycleEnd":"2026-04-28T00:00:00Z"}'
+CURSOR_COOKIE="fake-session-token"
+out=$(fetch_cursor 2>&1) || true
+unset CURSOR_COOKIE
+cursor_line=$(printf '%s\n' "$out" | grep "Cursor")
+other_line=$(printf '%s\n' "$out" | grep "Other")
+assert_contains "$cursor_line" "12%" "fetch_cursor pools: shows Cursor pool usage"
+assert_contains "$other_line" "47%" "fetch_cursor pools: shows other-model pool usage"
+assert_not_contains "$out" "Monthly" "fetch_cursor pools: omits aggregate plan usage"
+
+# On-demand usage remains useful even when the plan percentage is absent.
+set_http_response "200" '{"individualUsage":{"onDemand":{"enabled":true,"used":1250,"limit":5000}},"billingCycleEnd":"2026-04-28T00:00:00Z"}'
+CURSOR_COOKIE="fake-session-token"
+out=$(fetch_cursor 2>&1) || true
+unset CURSOR_COOKIE
+assert_contains "$out" "On-demand" "fetch_cursor on-demand: renders without plan percentage"
+assert_contains "$out" "25%" "fetch_cursor on-demand: calculates usage percentage"
+assert_contains "$out" '$12.50 / $50.00' "fetch_cursor on-demand: formats credit amounts"
+
+# Enterprise responses can expose individual and team pools without plan data.
+set_http_response "200" '{"membershipType":"enterprise","individualUsage":{"overall":{"enabled":true,"used":7100,"limit":10000}},"teamUsage":{"pooled":{"enabled":true,"used":3600000,"limit":60000000},"onDemand":{"enabled":true,"used":150000,"limit":500000}},"billingCycleEnd":"2026-04-28T00:00:00Z"}'
+CURSOR_COOKIE="fake-session-token"
+out=$(fetch_cursor 2>&1) || true
+unset CURSOR_COOKIE
+individual_line=$(printf '%s\n' "$out" | grep "Individual")
+team_pool_line=$(printf '%s\n' "$out" | grep "Team pool")
+team_extra_line=$(printf '%s\n' "$out" | grep "Team extra")
+assert_contains "$individual_line" "71%" "fetch_cursor enterprise: shows individual usage"
+assert_contains "$team_pool_line" "6%" "fetch_cursor enterprise: shows pooled team usage"
+assert_contains "$team_extra_line" "30%" "fetch_cursor enterprise: shows team on-demand usage"
+
+# Unlimited accounts have no finite meter but still report their plan state.
+set_http_response "200" '{"membershipType":"ultra","isUnlimited":true}'
+CURSOR_COOKIE="fake-session-token"
+out=$(fetch_cursor 2>&1) || true
+unset CURSOR_COOKIE
+assert_contains "$out" "Plan" "fetch_cursor unlimited: shows plan label"
+assert_contains "$out" "ultra · unlimited" "fetch_cursor unlimited: shows membership and state"
+
+# A valid modern response is authoritative and must not fall through to legacy APIs.
+set_http_response "200" '{"unexpected":true}'
+CURSOR_COOKIE="fake-session-token"
+out=$(fetch_cursor 2>&1) || true
+unset CURSOR_COOKIE
+assert_contains "$out" "usage data is unavailable" "fetch_cursor malformed modern response: reports unavailable data"
+assert_not_contains "$out" "no premium request quota" "fetch_cursor malformed modern response: does not use legacy quota"
+
+# An unavailable modern endpoint still falls back to the legacy request quota.
+http_json() {
+  case "$1" in
+  */api/usage-summary)
+    HTTP_STATUS="404"
+    HTTP_BODY=""
+    ;;
+  */api/auth/me)
+    HTTP_STATUS="200"
+    HTTP_BODY='{"sub":"user-1"}'
+    ;;
+  */api/usage\?user=*)
+    HTTP_STATUS="200"
+    HTTP_BODY='{"gpt-4":{"numRequests":25,"maxRequestUsage":100}}'
+    ;;
+  esac
+}
+CURSOR_COOKIE="fake-session-token"
+out=$(fetch_cursor 2>&1) || true
+unset CURSOR_COOKIE
+assert_contains "$out" "Monthly" "fetch_cursor legacy fallback: shows request quota"
+assert_contains "$out" "25%" "fetch_cursor legacy fallback: calculates request usage"
+assert_contains "$out" "25 / 100 requests" "fetch_cursor legacy fallback: shows request counts"
+
 # HTTP 401 with cookie (clears cache and shows error)
 _cursor_cache_clear() { true; }  # no-op for test
 set_http_response "401" ""

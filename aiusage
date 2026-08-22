@@ -1319,6 +1319,29 @@ _cursor_cache_clear() {
   fi
 }
 
+_cursor_draw_percent_meter() {
+  local label="$1" percent rendered_before="${3:-0}"
+  percent=$(numeric_or "${2:-}" "")
+  [[ -n "$percent" ]] || return 1
+
+  ((rendered_before > 0)) && printf "\n"
+  draw_bar "$label" "$percent"
+}
+
+_cursor_draw_credit_meter() {
+  local label="$1" enabled="${2:-}" used limit rendered_before="${5:-0}"
+  [[ "$enabled" != "false" ]] || return 1
+
+  used=$(numeric_or "${3:-}" 0)
+  limit=$(numeric_or "${4:-}" "")
+  [[ -n "$limit" ]] || return 1
+  awk "BEGIN { exit !($limit > 0) }" 2>/dev/null || return 1
+
+  ((rendered_before > 0)) && printf "\n"
+  draw_bar "$label" "$(calculate_percent "$used" "$limit")"
+  draw_credits_line "$used" "$limit"
+}
+
 fetch_cursor() {
   local cookie="${CURSOR_COOKIE:-}" cookie_rc=0
   if [[ -z "$cookie" ]]; then
@@ -1348,32 +1371,101 @@ fetch_cursor() {
   sum_resp="$HTTP_BODY"
   sum_status="$HTTP_STATUS"
 
-  if [[ "$sum_status" == 2* ]] && [[ -n "$sum_resp" ]]; then
-    local plan_percent billing_end od_used od_limit
-    IFS=$'\t' read -r plan_percent billing_end od_used od_limit < <(
-      printf '%s' "$sum_resp" | jq -r '[
-        (.individualUsage.plan.totalPercentUsed // ""),
-        (.billingCycleEnd // ""),
-        (.individualUsage.onDemand.used // ""),
-        (.individualUsage.onDemand.limit // "")
-      ] | @tsv' 2>/dev/null
-    )
+  if [[ "$sum_status" == "401" || "$sum_status" == "403" ]]; then
+    _cursor_cache_clear
+    draw_http_error "$sum_status" "session expired — re-login at cursor.com or update CURSOR_COOKIE"
+    return
+  fi
 
-    if [[ -n "$plan_percent" && "$plan_percent" != "null" ]]; then
+  if [[ "$sum_status" == 2* ]] && [[ -n "$sum_resp" ]]; then
+    local billing_end membership_type is_unlimited
+    local auto_percent api_percent total_percent
+    local plan_enabled plan_used plan_limit
+    local overall_enabled overall_used overall_limit
+    local od_enabled od_used od_limit
+    local team_enabled team_used team_limit
+    local team_od_enabled team_od_used team_od_limit
+    local separator=$'\x1f'
+    IFS="$separator" read -r \
+      billing_end membership_type is_unlimited \
+      auto_percent api_percent total_percent \
+      plan_enabled plan_used plan_limit \
+      overall_enabled overall_used overall_limit \
+      od_enabled od_used od_limit \
+      team_enabled team_used team_limit \
+      team_od_enabled team_od_used team_od_limit < <(
+        printf '%s' "$sum_resp" | jq -jr '
+          [
+            .billingCycleEnd,
+            .membershipType,
+            .isUnlimited,
+            .individualUsage.plan.autoPercentUsed,
+            .individualUsage.plan.apiPercentUsed,
+            .individualUsage.plan.totalPercentUsed,
+            .individualUsage.plan.enabled,
+            .individualUsage.plan.used,
+            .individualUsage.plan.limit,
+            .individualUsage.overall.enabled,
+            .individualUsage.overall.used,
+            .individualUsage.overall.limit,
+            .individualUsage.onDemand.enabled,
+            .individualUsage.onDemand.used,
+            .individualUsage.onDemand.limit,
+            .teamUsage.pooled.enabled,
+            .teamUsage.pooled.used,
+            .teamUsage.pooled.limit,
+            .teamUsage.onDemand.enabled,
+            .teamUsage.onDemand.used,
+            .teamUsage.onDemand.limit
+          ]
+          | map(if . == null then "" else tostring end)
+          | join("\u001f") + "\n"
+        ' 2>/dev/null
+      )
+
+    local rendered=0 plan_percent_rendered=0
+    if _cursor_draw_percent_meter "Cursor" "$auto_percent" "$rendered"; then
+      rendered=1
+      plan_percent_rendered=1
+    fi
+    if _cursor_draw_percent_meter "Other" "$api_percent" "$rendered"; then
+      rendered=1
+      plan_percent_rendered=1
+    fi
+    if ((plan_percent_rendered == 0)) && _cursor_draw_percent_meter "Monthly" "$total_percent" "$rendered"; then
+      rendered=1
+      plan_percent_rendered=1
+    fi
+    if ((plan_percent_rendered == 0)) && _cursor_draw_credit_meter "Included" "$plan_enabled" "$plan_used" "$plan_limit" "$rendered"; then
+      rendered=1
+    fi
+    if _cursor_draw_credit_meter "Individual" "$overall_enabled" "$overall_used" "$overall_limit" "$rendered"; then
+      rendered=1
+    fi
+    if _cursor_draw_credit_meter "On-demand" "$od_enabled" "$od_used" "$od_limit" "$rendered"; then
+      rendered=1
+    fi
+    if _cursor_draw_credit_meter "Team pool" "$team_enabled" "$team_used" "$team_limit" "$rendered"; then
+      rendered=1
+    fi
+    if _cursor_draw_credit_meter "Team extra" "$team_od_enabled" "$team_od_used" "$team_od_limit" "$rendered"; then
+      rendered=1
+    fi
+
+    if ((rendered > 0)); then
       local reset_epoch
       reset_epoch=$(normalize_epoch "$billing_end")
-      draw_bar "Monthly" "${plan_percent%.*}"
       draw_reset "$reset_epoch"
-
-      if [[ -n "$od_limit" && "$od_limit" != "0" && "$od_limit" != "null" ]]; then
-        local od_percent
-        od_percent=$(calculate_percent "${od_used:-0}" "$od_limit")
-        printf "\n"
-        draw_bar "On-demand" "$od_percent"
-        draw_credits_line "${od_used:-0}" "$od_limit"
-      fi
       return
     fi
+
+    if [[ "$is_unlimited" == "true" ]]; then
+      printf "  %-*s %s · unlimited\n" "$LABEL_WIDTH" "Plan" "${membership_type:-Cursor}"
+      return
+    fi
+
+    draw_error "Cursor usage data is unavailable"
+    return
   fi
 
   # Step 2: fall back to legacy request-count endpoint — requires user ID
