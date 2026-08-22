@@ -46,6 +46,14 @@ assert_eq "Credits" "$(duration_to_label 'P1M')"    "duration_to_label: P1M → 
 assert_eq "Credits" "$(duration_to_label '')"       "duration_to_label: empty → Credits"
 assert_eq "Credits" "$(duration_to_label 'UNKNOWN')" "duration_to_label: unknown → Credits"
 
+# ── jetbrains_quota_to_credits ───────────────────────────
+
+assert_eq "10"   "$(jetbrains_quota_to_credits 1000000)" "jetbrains credits: converts whole credits"
+assert_eq "1.5"  "$(jetbrains_quota_to_credits 150000)"  "jetbrains credits: trims one trailing zero"
+assert_eq "1.25" "$(jetbrains_quota_to_credits 125000)"  "jetbrains credits: preserves two decimals"
+assert_eq "0"    "$(jetbrains_quota_to_credits 0)"       "jetbrains credits: preserves zero"
+assert_eq ""     "$(jetbrains_quota_to_credits invalid)" "jetbrains credits: rejects malformed quota"
+
 # ── codex_window_label ────────────────────────────────────
 
 assert_eq "5h"     "$(codex_window_label '18000' 'fallback')"  "codex_window_label: five hours"

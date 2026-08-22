@@ -262,7 +262,7 @@ _jb_file=$(mktemp)
 cat > "$_jb_file" << 'EOF'
 <application>
   <component name="AIAssistantQuotaManager2">
-    <option name="quotaInfo" value="{&quot;current&quot;: 150, &quot;maximum&quot;: 1000, &quot;until&quot;: 1745000000}"/>
+    <option name="quotaInfo" value="{&quot;current&quot;: 150000, &quot;maximum&quot;: 1000000, &quot;topUpQuota&quot;: {&quot;current&quot;: 250000, &quot;maximum&quot;: 1000000}}"/>
     <option name="nextRefill" value="{&quot;tariff&quot;: {&quot;duration&quot;: &quot;P30D&quot;}}"/>
   </component>
 </application>
@@ -270,12 +270,28 @@ EOF
 find_jetbrains_quota_file() { printf "%s" "$_jb_file"; }
 out=$(fetch_jetbrains 2>&1) || true
 rm -f "$_jb_file"
-# Note: duration is extracted on a separate line from the @tsv output, so `read`
-# stops at jq's trailing newline — duration is always empty → label falls back to "Credits"
-assert_contains "$out" "Credits" "fetch_jetbrains: bar label (Credits — duration after jq newline)"
-assert_contains "$out" "15%"     "fetch_jetbrains: shows 15% used (150/1000)"
-assert_contains "$out" "150"  "fetch_jetbrains: shows credits used"
-assert_contains "$out" "1000" "fetch_jetbrains: shows credits limit"
+assert_contains "$out" "30d"         "fetch_jetbrains: labels the tariff duration"
+assert_contains "$out" "15%"         "fetch_jetbrains: shows 15% tariff usage"
+assert_contains "$out" "1.5 / 10"    "fetch_jetbrains: converts raw tariff quota to credits"
+assert_contains "$out" "Top-up"      "fetch_jetbrains: shows top-up usage"
+assert_contains "$out" "25%"         "fetch_jetbrains: shows 25% top-up usage"
+assert_contains "$out" "2.5 / 10"    "fetch_jetbrains: converts raw top-up quota to credits"
+assert_not_contains "$out" "1000000" "fetch_jetbrains: hides raw quota units"
+
+# Accounts without purchased top-ups omit the optional top-up section.
+_jb_file=$(mktemp)
+cat > "$_jb_file" << 'EOF'
+<application>
+  <component name="AIAssistantQuotaManager2">
+    <option name="quotaInfo" value="{&quot;current&quot;: 150000, &quot;maximum&quot;: 1000000, &quot;until&quot;: 1745000000}"/>
+    <option name="nextRefill" value="{&quot;tariff&quot;: {&quot;duration&quot;: &quot;P30D&quot;}}"/>
+  </component>
+</application>
+EOF
+find_jetbrains_quota_file() { printf "%s" "$_jb_file"; }
+out=$(fetch_jetbrains 2>&1) || true
+rm -f "$_jb_file"
+assert_not_contains "$out" "Top-up" "fetch_jetbrains: omits unavailable top-up quota"
 
 # ── fetch_copilot ─────────────────────────────────────────
 

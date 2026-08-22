@@ -441,6 +441,19 @@ duration_to_label() {
   printf "Credits"
 }
 
+jetbrains_quota_to_credits() {
+  local quota
+  quota=$(numeric_or "${1:-}" "")
+  [[ -n "$quota" ]] || return 0
+
+  awk "BEGIN {
+    value = $quota / 100000
+    formatted = sprintf(\"%.2f\", value)
+    sub(/\\.?0+$/, \"\", formatted)
+    printf \"%s\", formatted
+  }" 2>/dev/null
+}
+
 codex_window_label() {
   local seconds="${1:-}" fallback="${2:-}"
 
@@ -1617,20 +1630,16 @@ fetch_jetbrains() {
 
   local current maximum until topup_current topup_max duration quota_values
   quota_values=$(
-    {
-      printf '%s' "$quota_info" | jq -r '[
-        (.current // ""),
-        (.maximum // ""),
-        (.until // ""),
-        (.topUpQuota.current // ""),
-        (.topUpQuota.maximum // "")
-      ] | @tsv' 2>/dev/null
-      printf '\t'
-      printf '%s' "$next_refill" | jq -r '.tariff.duration // ""' 2>/dev/null
-      printf '\n'
-    }
+    printf '%s' "$quota_info" | jq -jr '[
+      (.current // ""),
+      (.maximum // ""),
+      (.until // ""),
+      (.topUpQuota.current // ""),
+      (.topUpQuota.maximum // "")
+    ] | map(tostring) | join("\u001f")' 2>/dev/null
   )
-  IFS=$'\t' read -r current maximum until topup_current topup_max duration <<<"$quota_values"
+  IFS=$'\x1f' read -r current maximum until topup_current topup_max <<<"$quota_values"
+  duration=$(printf '%s' "$next_refill" | jq -r '.tariff.duration // ""' 2>/dev/null)
 
   if [[ -z "$maximum" || "$maximum" == "0" || "$maximum" == "null" ]]; then
     draw_error "JetBrains quota limit is unavailable"
@@ -1649,7 +1658,10 @@ fetch_jetbrains() {
   fi
   draw_reset "$reset_epoch"
 
-  printf "  %-*s ${DIM}%s / %s credits${RESET}\n" "$LABEL_WIDTH" "" "${current%.*}" "${maximum%.*}"
+  printf "  %-*s ${DIM}%s / %s credits${RESET}\n" \
+    "$LABEL_WIDTH" "" \
+    "$(jetbrains_quota_to_credits "$current")" \
+    "$(jetbrains_quota_to_credits "$maximum")"
 
   if [[ -n "$topup_max" && "$topup_max" != "0" && "$topup_max" != "null" ]]; then
     local topup_percent
@@ -1660,7 +1672,10 @@ fetch_jetbrains() {
     else
       draw_unavailable "Top-up"
     fi
-    printf "  %-*s ${DIM}%s / %s credits${RESET}\n" "$LABEL_WIDTH" "" "${topup_current%.*}" "${topup_max%.*}"
+    printf "  %-*s ${DIM}%s / %s credits${RESET}\n" \
+      "$LABEL_WIDTH" "" \
+      "$(jetbrains_quota_to_credits "$topup_current")" \
+      "$(jetbrains_quota_to_credits "$topup_max")"
   fi
 }
 
