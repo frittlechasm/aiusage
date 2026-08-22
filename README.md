@@ -87,6 +87,7 @@ Tests live in `tests/`. Run `./tests/run_tests` after every change.
 > - This script reads local auth files, local quota files, and in Cursor's case browser cookie stores. Run it only on machines you trust.
 > - On macOS, extracted Cursor and Copilot credentials are cached in the login Keychain. On Linux, they are cached in `~/.cache/aiusage/` with `0600` permissions.
 > - If you set `CURSOR_COOKIE`, `COPILOT_GITHUB_TOKEN`, `OPENCODE_GO_API_KEY`, or `OPENCODE_API_KEY` manually, avoid leaving them in shell history or dotfiles.
+> - Requests pass credentials as `curl -H` arguments rather than temp files, so tokens are briefly visible in the process list (`ps`) while a request runs. This is the common trade-off for CLI tools; the previous on-disk staging was worse.
 > - Do not commit token files, copied cookies, or cache files.
 > - Because this is a plain Bash script, you can audit exactly what it reads and what URLs it calls before running it.
 

@@ -272,6 +272,7 @@ http_json() {
   # Headers and body are passed as curl arguments instead of temp files:
   # they carry bearer tokens and session cookies, which must not touch
   # disk where a signal or crash mid-request would leave them behind.
+  # Trade-off: the header values are briefly visible in the process list.
   local tmp_body status curl_args=(-s --max-time 10 -w "%{http_code}") h
   for h in "$@"; do
     curl_args+=(-H "$h")
