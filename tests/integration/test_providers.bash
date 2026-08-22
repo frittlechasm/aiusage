@@ -305,6 +305,11 @@ assert_not_contains "$out" "Premium"      "fetch_copilot credits: hides legacy P
 assert_not_contains "$out" "Chat"         "fetch_copilot credits: hides unlimited Chat quota"
 assert_not_contains "$out" "reset: --"    "fetch_copilot credits: parses quota_reset_date_utc"
 
+# Date-only *_utc reset values must be anchored to UTC, not treated as local time.
+set_http_response "200" '{"copilot_plan":"copilot_pro","token_based_billing":true,"quota_reset_date_utc":"2026-09-01","quota_snapshots":{"premium_interactions":{"entitlement":1500,"quota_remaining":750,"remaining":750,"percent_remaining":50.0,"unlimited":false}}}'
+out=$(fetch_copilot 2>&1) || true
+assert_not_contains "$out" "reset: --"   "fetch_copilot credits: parses date-only utc reset"
+
 # Credits can exceed the included entitlement without double-counting a negative balance.
 set_http_response "200" '{"copilot_plan":"copilot_pro","token_based_billing":true,"quota_snapshots":{"premium_interactions":{"entitlement":1500,"quota_remaining":-25,"remaining":-25,"percent_remaining":0,"unlimited":false,"overage_count":25,"overage_permitted":true,"quota_reset_at":1785542400}}}'
 out=$(fetch_copilot 2>&1) || true

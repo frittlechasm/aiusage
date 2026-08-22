@@ -202,9 +202,14 @@ calculate_used_percent_from_remaining() {
 }
 
 macos_keychain_read() {
-  local service="$1"
+  local service="$1" account="${2:-}"
   command -v security >/dev/null 2>&1 || return 1
-  security find-generic-password -s "$service" -a "$USER" -w 2>/dev/null
+  if [[ -n "$account" ]]; then
+    security find-generic-password -s "$service" -a "$account" -w 2>/dev/null
+  else
+    # Account-less lookup: items written by other tools may have no account.
+    security find-generic-password -s "$service" -w 2>/dev/null
+  fi
 }
 
 macos_keychain_write() {
@@ -806,7 +811,7 @@ fetch_claude() {
 
   if [[ -z "$token" ]]; then
     # try macOS keychain
-    token=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null || true)
+    token=$(macos_keychain_read "Claude Code-credentials" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null || true)
   fi
 
   if [[ -z "$token" ]]; then
@@ -1245,7 +1250,7 @@ _CURSOR_COOKIE_CACHE_TTL=604800
 
 _cursor_cache_read() {
   if [[ "$OSTYPE" == darwin* ]]; then
-    macos_keychain_read "$_CURSOR_KEYCHAIN_SERVICE"
+    macos_keychain_read "$_CURSOR_KEYCHAIN_SERVICE" "$USER"
   else
     linux_ttl_cache_read "$_CURSOR_COOKIE_CACHE" "$_CURSOR_COOKIE_CACHE_TTL"
   fi
@@ -1635,7 +1640,7 @@ _COPILOT_TOKEN_CACHE_TTL=2592000
 
 _copilot_cache_read() {
   if [[ "$OSTYPE" == darwin* ]]; then
-    macos_keychain_read "$_COPILOT_KEYCHAIN_SERVICE"
+    macos_keychain_read "$_COPILOT_KEYCHAIN_SERVICE" "$USER"
   else
     linux_ttl_cache_read "$_COPILOT_TOKEN_CACHE" "$_COPILOT_TOKEN_CACHE_TTL"
   fi
@@ -1738,6 +1743,25 @@ _copilot_auth_source_available() {
   command -v copilot >/dev/null 2>&1
 }
 
+# Expand a Copilot reset value for normalize_epoch. Date-only values need a
+# time; fields named *_utc must be anchored to UTC or the reset renders
+# shifted by the local UTC offset.
+copilot_expand_reset() {
+  local tag="$1" date="$2"
+  case "$date" in
+  [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9])
+    if [[ "$tag" == "utc" ]]; then
+      printf '%sT00:00:00Z' "$date"
+    else
+      printf '%sT00:00:00' "$date"
+    fi
+    ;;
+  *)
+    printf '%s' "$date"
+    ;;
+  esac
+}
+
 fetch_copilot() {
   local token=""
 
@@ -1836,15 +1860,17 @@ fetch_copilot() {
     chat_pct=$(percent_remaining_of "$mq_chat" "$lq_chat")
   fi
 
-  local reset_date reset_epoch
-  reset_date=$(printf '%s' "$resp" | jq -r '
+  local reset_info reset_tag reset_date reset_epoch
+  reset_info=$(printf '%s' "$resp" | jq -r '
     (.quota_snapshots.premium_models // .quota_snapshots.premium_interactions // {}) as $premium |
-    [.quota_reset_date_utc, .quota_reset_date, $premium.quota_reset_at,
-      $premium.reset_date, .limited_user_reset_date] |
-    map(select(. != null and . != "")) | .[0] // ""
+    [["utc", .quota_reset_date_utc], ["local", .quota_reset_date],
+     ["utc", $premium.quota_reset_at], ["utc", $premium.reset_date],
+     ["local", .limited_user_reset_date]] |
+    map(select(.[1] != null and .[1] != "")) |
+    .[0] // [] | if length == 0 then "\t" else @tsv end
   ' 2>/dev/null)
-  # Expand plain YYYY-MM-DD so normalize_epoch can parse it
-  [[ "$reset_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && reset_date="${reset_date}T00:00:00"
+  IFS=$'\t' read -r reset_tag reset_date <<<"$reset_info"
+  reset_date=$(copilot_expand_reset "$reset_tag" "$reset_date")
   reset_epoch=$(normalize_epoch "$reset_date")
 
   # ── Render ────────────────────────────────────────────────────────────────

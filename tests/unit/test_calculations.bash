@@ -47,6 +47,13 @@ assert_eq "0.0"  "$(percent_remaining_of 100 0)"      "percent_remaining_of: non
 assert_eq ""     "$(percent_remaining_of 0 50)"       "percent_remaining_of: zero entitlement → empty"
 assert_eq ""     "$(percent_remaining_of abc def)"    "percent_remaining_of: garbage inputs → empty"
 
+# ── copilot_expand_reset ──────────────────────────────────
+
+assert_eq "2026-09-01T00:00:00Z" "$(copilot_expand_reset utc 2026-09-01)"  "expand_reset: date-only utc anchored to UTC"
+assert_eq "2026-09-01T00:00:00"  "$(copilot_expand_reset local 2026-09-01)" "expand_reset: date-only local stays naive"
+assert_eq "2026-09-01T10:30:00Z" "$(copilot_expand_reset utc '2026-09-01T10:30:00Z')" "expand_reset: datetime passes through"
+assert_eq ""                     "$(copilot_expand_reset utc '')"   "expand_reset: empty passes through"
+
 # ── strict-mode safety for untrusted values ───────────────
 # Production invokes these helpers under set -euo pipefail; malformed API
 # strings must fall back instead of crashing or evaluating as expressions.
