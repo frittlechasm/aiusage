@@ -210,6 +210,12 @@ _cursor_cache_read()              { return 1; }
 out=$(fetch_cursor 2>&1) || true
 assert_contains "$out" "no Cursor session" "fetch_cursor: no cookie → error"
 
+# Browser has a Cursor session but its cookie cannot be decrypted (exit 2)
+get_cursor_cookie_from_browser() { return 2; }
+out=$(fetch_cursor 2>&1) || true
+assert_contains "$out" "keyring-encrypted" "fetch_cursor: undecryptable browser cookie → keyring message"
+get_cursor_cookie_from_browser() { return 1; }
+
 # Success via CURSOR_COOKIE (modern usage-summary endpoint)
 set_http_response "200" '{"individualUsage":{"plan":{"totalPercentUsed":"35.0"}},"billingCycleEnd":"2026-04-28T00:00:00Z"}'
 CURSOR_COOKIE="fake-session-token"

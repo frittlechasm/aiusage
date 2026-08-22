@@ -1100,6 +1100,7 @@ else:
 
 # Cache keychain lookups so macOS prompts at most once per browser.
 _keychain_cache = {}
+LOCKED = False
 
 def get_keychain_password(service):
     if service in _keychain_cache:
@@ -1126,7 +1127,11 @@ def decrypt(enc_hex, key_service):
         key = hashlib.pbkdf2_hmac('sha1', password, b'saltysalt', 1003, dklen=16)
     else:
         if version == b'v11':
-            return None  # requires secret-service; skip
+            # Encrypted with an OS key store (libsecret/KWallet); needs a
+            # secret-service dependency we do not carry.
+            global LOCKED
+            LOCKED = True
+            return None
         key = hashlib.pbkdf2_hmac('sha1', b'peanuts', b'saltysalt', 1, dklen=16)
     iv = b' ' * 16
     result = subprocess.run(
@@ -1189,15 +1194,27 @@ for base_dir, key_service in entries:
             print(val, end='')
             sys.exit(0)
 
-sys.exit(1)
+# Exit 2: a cursor.com cookie exists but could not be decrypted (e.g. v11
+# on Linux, which requires an OS key store).
+sys.exit(2 if LOCKED else 1)
 PYEOF
 }
 
 # Try all browsers; print the cookie value and return 0 on success.
+# Exit 2 when a browser has a Cursor session we cannot decrypt.
 get_cursor_cookie_from_browser() {
-  local val
-  val=$(_cursor_cookie_firefox 2>/dev/null) && [[ -n "$val" ]] && printf '%s' "$val" && return 0
-  val=$(_cursor_cookie_chromium 2>/dev/null) && [[ -n "$val" ]] && printf '%s' "$val" && return 0
+  local val rc=0
+  val=$(_cursor_cookie_firefox 2>/dev/null) && [[ -n "$val" ]] && {
+    printf '%s' "$val"
+    return 0
+  }
+  rc=0
+  val=$(_cursor_cookie_chromium 2>/dev/null) || rc=$?
+  if [[ -n "$val" ]] && ((rc == 0)); then
+    printf '%s' "$val"
+    return 0
+  fi
+  ((rc == 2)) && return 2
   return 1
 }
 
@@ -1232,16 +1249,20 @@ _cursor_cache_clear() {
 }
 
 fetch_cursor() {
-  local cookie="${CURSOR_COOKIE:-}"
+  local cookie="${CURSOR_COOKIE:-}" cookie_rc=0
   if [[ -z "$cookie" ]]; then
     cookie=$(_cursor_cache_read) || true
   fi
   if [[ -z "$cookie" ]]; then
-    cookie=$(get_cursor_cookie_from_browser) || true
+    cookie=$(get_cursor_cookie_from_browser) || cookie_rc=$?
     [[ -n "$cookie" ]] && _cursor_cache_write "$cookie"
   fi
   if [[ -z "$cookie" ]]; then
-    draw_error "no Cursor session found — set CURSOR_COOKIE or log in via a browser"
+    if ((cookie_rc == 2)); then
+      draw_error "Cursor session found but its cookie is keyring-encrypted — set CURSOR_COOKIE to use it"
+    else
+      draw_error "no Cursor session found — set CURSOR_COOKIE or log in via a browser"
+    fi
     return
   fi
 
