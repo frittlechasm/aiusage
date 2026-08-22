@@ -404,8 +404,16 @@ assert_eq "login-key" "$key" "opencode-go auth: reads the generic opencode login
 # A dedicated opencode-go entry wins over the generic one.
 printf '{"opencode-go":{"type":"api","key":"go-key"},"opencode":{"type":"api","key":"login-key"}}' >"$_tmp/.local/share/opencode/auth.json"
 key=$(HOME="$_tmp" XDG_DATA_HOME= OPENCODE_GO_API_KEY= OPENCODE_API_KEY= _opencode_go_resolve_key)
-rm -rf "$_tmp"
 assert_eq "go-key" "$key" "opencode-go auth: dedicated entry takes precedence over login entry"
+
+# A broken dedicated entry must not shadow a valid generic one.
+printf '{"opencode-go":{"type":"api","key":""},"opencode":{"type":"api","key":"login-key"}}' >"$_tmp/.local/share/opencode/auth.json"
+key=$(HOME="$_tmp" XDG_DATA_HOME= OPENCODE_GO_API_KEY= OPENCODE_API_KEY= _opencode_go_resolve_key)
+assert_eq "login-key" "$key" "opencode-go auth: empty dedicated key falls back to login entry"
+printf '{"opencode-go":"not-an-object","opencode":{"type":"api","key":"login-key"}}' >"$_tmp/.local/share/opencode/auth.json"
+key=$(HOME="$_tmp" XDG_DATA_HOME= OPENCODE_GO_API_KEY= OPENCODE_API_KEY= _opencode_go_resolve_key)
+assert_eq "login-key" "$key" "opencode-go auth: non-object dedicated entry falls back to login entry"
+rm -rf "$_tmp"
 
 # The provider-specific environment variable wins over the official shared name.
 key=$(OPENCODE_GO_API_KEY="specific-key" OPENCODE_API_KEY="shared-key" _opencode_go_resolve_key)

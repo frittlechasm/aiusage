@@ -1946,10 +1946,13 @@ _opencode_go_resolve_key() {
   [[ -f "$auth_file" ]] || return 1
 
   # `opencode auth login` stores the API key under the "opencode" provider
-  # id; accept a dedicated "opencode-go" entry first, then the generic one.
+  # id; prefer a dedicated "opencode-go" entry, then the generic one. Skip
+  # non-object and empty-key entries so a broken dedicated entry cannot
+  # shadow a valid generic one.
   key=$(jq -r '
     [(.["opencode-go"] // empty), (.["opencode"] // empty)] |
-    map(select(.type == "api" and (.key | type) == "string")) |
+    map(select(type == "object" and .type == "api"
+               and (.key | type) == "string" and .key != "")) |
     first | .key // empty
   ' "$auth_file" 2>/dev/null) || true
   [[ -n "$key" ]] || return 1
