@@ -496,6 +496,22 @@ codex_window_reset_mode() {
   fi
 }
 
+codex_resolve_reset_epoch() {
+  local absolute_epoch relative_seconds reference_epoch resolved
+  absolute_epoch=$(normalize_epoch "${1:-}")
+  if [[ -n "$absolute_epoch" ]]; then
+    printf '%s' "$absolute_epoch"
+    return 0
+  fi
+
+  relative_seconds=$(numeric_or "${2:-}" "")
+  reference_epoch=$(numeric_or "${3:-}" "")
+  [[ -n "$relative_seconds" && -n "$reference_epoch" ]] || return 0
+
+  resolved=$(awk "BEGIN { printf \"%.0f\", $reference_epoch + $relative_seconds }" 2>/dev/null) || true
+  printf '%s' "$resolved"
+}
+
 normalize_epoch() {
   local raw="${1:-}"
   [[ -z "$raw" || "$raw" == "null" ]] && return 0
@@ -986,21 +1002,27 @@ fetch_codex() {
     return
   fi
 
-  local primary primary_seconds primary_reset secondary secondary_seconds secondary_reset banked_resets
-  IFS=$'\037' read -r primary primary_seconds primary_reset secondary secondary_seconds secondary_reset banked_resets < <(
+  local primary primary_seconds primary_reset primary_reset_after
+  local secondary secondary_seconds secondary_reset secondary_reset_after banked_resets
+  IFS=$'\037' read -r \
+    primary primary_seconds primary_reset primary_reset_after \
+    secondary secondary_seconds secondary_reset secondary_reset_after banked_resets < <(
     printf '%s' "$resp" | jq -r 'def first_reset(w): w.reset_at // w.resets_at // w.resetAt // w.resetsAt // w.window_end // w.window_end_at // w.windowEnd // w.windowEndAt;
       [(.rate_limit.primary_window.used_percent // ""),
        (.rate_limit.primary_window.limit_window_seconds // ""),
        (first_reset(.rate_limit.primary_window) // ""),
+       (.rate_limit.primary_window.reset_after_seconds // .rate_limit.primary_window.resetAfterSeconds // ""),
        (.rate_limit.secondary_window.used_percent // ""),
        (.rate_limit.secondary_window.limit_window_seconds // ""),
        (first_reset(.rate_limit.secondary_window) // ""),
+       (.rate_limit.secondary_window.reset_after_seconds // .rate_limit.secondary_window.resetAfterSeconds // ""),
        (.rate_limit_reset_credits.available_count // "")] | map(tostring) | join("\u001f")' 2>/dev/null
   )
 
-  local primary_reset_epoch secondary_reset_epoch
-  primary_reset_epoch=$(normalize_epoch "$primary_reset")
-  secondary_reset_epoch=$(normalize_epoch "$secondary_reset")
+  local primary_reset_epoch secondary_reset_epoch reset_reference_epoch
+  reset_reference_epoch=$(date +%s)
+  primary_reset_epoch=$(codex_resolve_reset_epoch "$primary_reset" "$primary_reset_after" "$reset_reference_epoch")
+  secondary_reset_epoch=$(codex_resolve_reset_epoch "$secondary_reset" "$secondary_reset_after" "$reset_reference_epoch")
 
   local primary_label secondary_label
   primary_label=$(codex_window_label "$primary_seconds" "5h")
@@ -1031,8 +1053,11 @@ fetch_codex() {
     draw_unavailable "Usage" "$banked_resets_note"
   fi
 
-  local spark_primary spark_primary_seconds spark_primary_reset spark_secondary spark_secondary_seconds spark_secondary_reset
-  IFS=$'\037' read -r spark_primary spark_primary_seconds spark_primary_reset spark_secondary spark_secondary_seconds spark_secondary_reset < <(
+  local spark_primary spark_primary_seconds spark_primary_reset spark_primary_reset_after
+  local spark_secondary spark_secondary_seconds spark_secondary_reset spark_secondary_reset_after
+  IFS=$'\037' read -r \
+    spark_primary spark_primary_seconds spark_primary_reset spark_primary_reset_after \
+    spark_secondary spark_secondary_seconds spark_secondary_reset spark_secondary_reset_after < <(
     printf '%s' "$resp" | jq -r 'def first_reset(w): w.reset_at // w.resets_at // w.resetAt // w.resetsAt // w.window_end // w.window_end_at // w.windowEnd // w.windowEndAt;
       ((.additional_rate_limits // [])
        | map(select(((.limit_name // "") + " " + (.metered_feature // "")) | test("spark"; "i")))
@@ -1040,15 +1065,17 @@ fetch_codex() {
       | [($spark.rate_limit.primary_window.used_percent // ""),
          ($spark.rate_limit.primary_window.limit_window_seconds // ""),
          (first_reset($spark.rate_limit.primary_window) // ""),
+         ($spark.rate_limit.primary_window.reset_after_seconds // $spark.rate_limit.primary_window.resetAfterSeconds // ""),
          ($spark.rate_limit.secondary_window.used_percent // ""),
          ($spark.rate_limit.secondary_window.limit_window_seconds // ""),
-         (first_reset($spark.rate_limit.secondary_window) // "")] | map(tostring) | join("\u001f")' 2>/dev/null
+         (first_reset($spark.rate_limit.secondary_window) // ""),
+         ($spark.rate_limit.secondary_window.reset_after_seconds // $spark.rate_limit.secondary_window.resetAfterSeconds // "")] | map(tostring) | join("\u001f")' 2>/dev/null
   )
 
   if [[ -n "$spark_primary" || -n "$spark_secondary" ]]; then
     local spark_primary_reset_epoch spark_secondary_reset_epoch
-    spark_primary_reset_epoch=$(normalize_epoch "$spark_primary_reset")
-    spark_secondary_reset_epoch=$(normalize_epoch "$spark_secondary_reset")
+    spark_primary_reset_epoch=$(codex_resolve_reset_epoch "$spark_primary_reset" "$spark_primary_reset_after" "$reset_reference_epoch")
+    spark_secondary_reset_epoch=$(codex_resolve_reset_epoch "$spark_secondary_reset" "$spark_secondary_reset_after" "$reset_reference_epoch")
 
     printf "\n"
     if [[ -n "$spark_primary" ]]; then

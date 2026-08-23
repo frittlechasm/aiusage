@@ -199,6 +199,30 @@ assert_contains "$out" "Spark Wk" "fetch_codex weekly-only: labels the Spark wee
 assert_not_contains "$out" "Spark 5h" "fetch_codex weekly-only: omits the absent Spark 5h window"
 assert_not_contains "$out" "reset: --" "fetch_codex weekly-only: preserves reset timestamps after empty fields"
 
+# Relative reset durations are resolved from one request-time reference epoch.
+_tmp=$(make_tmp_home)
+mkdir -p "$_tmp/.codex"
+printf '{"tokens":{"access_token":"fake","account_id":"fake-id"}}' > "$_tmp/.codex/auth.json"
+set_http_response "200" '{"rate_limit":{"primary_window":{"used_percent":45,"reset_at":2100000000,"reset_after_seconds":60},"secondary_window":{"used_percent":20,"reset_after_seconds":120}},"additional_rate_limits":[{"limit_name":"GPT-5.3-Codex-Spark","rate_limit":{"primary_window":{"used_percent":15,"resetAfterSeconds":90},"secondary_window":{"used_percent":5,"reset_after_seconds":150}}}]}'
+out=$(
+  date() {
+    if [[ "$#" -eq 1 && "$1" == "+%s" ]]; then
+      printf '2000000000\n'
+    else
+      command date "$@"
+    fi
+  }
+  draw_reset() { printf 'reset_epoch=%s\n' "$1"; }
+  HOME="$_tmp"
+  fetch_codex 2>&1
+) || true
+cleanup_tmp_home
+assert_contains "$out" "reset_epoch=2100000000" "fetch_codex relative resets: prefers absolute primary reset"
+assert_not_contains "$out" "reset_epoch=2000000060" "fetch_codex relative resets: ignores primary fallback when absolute exists"
+assert_contains "$out" "reset_epoch=2000000120" "fetch_codex relative resets: resolves secondary reset"
+assert_contains "$out" "reset_epoch=2000000090" "fetch_codex relative resets: supports Spark camel-case reset"
+assert_contains "$out" "reset_epoch=2000000150" "fetch_codex relative resets: resolves Spark secondary reset"
+
 # HTTP 200 with optional Spark limits and account credits
 _tmp=$(make_tmp_home)
 mkdir -p "$_tmp/.codex"
