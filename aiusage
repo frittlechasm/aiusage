@@ -1636,9 +1636,10 @@ fetch_gemini() {
       reset=$4
       if (!(label in max) || percent > max[label]) {
         max[label]=percent
-      }
-      if (!(label in latest) || reset > latest[label]) {
-        latest[label]=reset
+        selected_reset[label]=reset
+      } else if (percent == max[label] && reset != "" &&
+                 (selected_reset[label] == "" || reset < selected_reset[label])) {
+        selected_reset[label]=reset
       }
       if (!(label in ord)) {
         ord[label]=$1 + 0
@@ -1648,7 +1649,7 @@ fetch_gemini() {
     END {
       for (i=1; i<=count; i++) {
         label=labels[i]
-        printf "%d\t%s\t%d\t%s\n", ord[label], label, max[label], latest[label]
+        printf "%d\t%s\t%d\t%s\n", ord[label], label, max[label], selected_reset[label]
       }
     }')
 
@@ -1656,12 +1657,12 @@ fetch_gemini() {
   while IFS=$'\t' read -r order label percent reset_time; do
     [[ -n "$order" ]] || continue
 
+    reset_epoch=$(normalize_epoch "$reset_time")
     if (( summary_percent < 0 || percent > summary_percent )); then
       summary_percent=$percent
-    fi
-
-    reset_epoch=$(normalize_epoch "$reset_time")
-    if [[ -n "$reset_epoch" ]] && (( reset_epoch > ${summary_reset_epoch:-0} )); then
+      summary_reset_epoch="$reset_epoch"
+    elif (( percent == summary_percent )) && [[ -n "$reset_epoch" ]] &&
+      { [[ -z "$summary_reset_epoch" ]] || (( reset_epoch < summary_reset_epoch )); }; then
       summary_reset_epoch="$reset_epoch"
     fi
 

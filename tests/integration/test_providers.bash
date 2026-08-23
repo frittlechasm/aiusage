@@ -322,6 +322,45 @@ out=$(fetch_gemini 2>&1) || true
 HOME="$_ORIG_HOME"; cleanup_tmp_home
 assert_contains "$out" "session expired" "fetch_gemini: expired token → error"
 
+# The summary reset must come from the bucket that supplies the maximum usage.
+_tmp=$(make_tmp_home)
+mkdir -p "$_tmp/.gemini"
+printf '{"access_token":"fake","expiry_date":4102444800000}' > "$_tmp/.gemini/oauth_creds.json"
+_gemini_quota_body='{"buckets":[{"modelId":"gemini-3-flash-preview","remainingFraction":0.2,"resetTime":"2030-01-02T00:00:00Z"},{"modelId":"gemini-3-pro-preview","remainingFraction":0.6,"resetTime":"2030-02-02T00:00:00Z"}]}'
+http_json() {
+  case "$1" in
+  *:loadCodeAssist)
+    HTTP_STATUS="200"
+    HTTP_BODY='{"cloudaicompanionProject":"test-project"}'
+    ;;
+  *:retrieveUserQuota)
+    HTTP_STATUS="200"
+    HTTP_BODY="$_gemini_quota_body"
+    ;;
+  esac
+}
+out=$(
+  draw_reset() { printf 'reset_epoch=%s\n' "$1"; }
+  HOME="$_tmp"
+  fetch_gemini 2>&1
+) || true
+assert_contains "$out" "80%" "fetch_gemini grouped buckets: shows maximum usage"
+assert_contains "$out" "reset_epoch=1893542400" "fetch_gemini grouped buckets: uses reset from maximum bucket"
+assert_not_contains "$out" "reset_epoch=1896220800" "fetch_gemini grouped buckets: ignores reset from lower-usage bucket"
+
+# The Daily summary applies the same pairing across different label groups.
+_gemini_quota_body='{"buckets":[{"modelId":"gemini-2.5-flash","remainingFraction":0.2,"resetTime":"2030-01-02T00:00:00Z"},{"modelId":"gemini-2.5-pro","remainingFraction":0.6,"resetTime":"2030-02-02T00:00:00Z"}]}'
+out=$(
+  draw_reset() { printf 'reset_epoch=%s\n' "$1"; }
+  HOME="$_tmp"
+  fetch_gemini 2>&1
+) || true
+cleanup_tmp_home
+assert_contains "$out" "Flash 80%" "fetch_gemini summary: keeps grouped Flash usage"
+assert_contains "$out" "Pro 40%" "fetch_gemini summary: keeps grouped Pro usage"
+assert_contains "$out" "reset_epoch=1893542400" "fetch_gemini summary: uses reset from maximum group"
+assert_not_contains "$out" "reset_epoch=1896220800" "fetch_gemini summary: ignores reset from lower-usage group"
+
 # ── fetch_jetbrains ───────────────────────────────────────
 
 # No quota file
