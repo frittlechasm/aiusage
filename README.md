@@ -27,6 +27,10 @@ irm https://raw.githubusercontent.com/frittlechasm/aiusage/main/install.ps1 | ie
 
 Requires `bash`, `curl`, `jq`.
 
+Cursor's optional automatic browser-cookie lookup also requires `sqlite3`.
+Chromium-based browsers additionally require `python3` and `openssl`. Set
+`CURSOR_COOKIE` to skip browser lookup and these optional dependencies.
+
 By default this installs to `~/.local/bin` on macOS/Linux/WSL and
 `%LOCALAPPDATA%\Programs\aiusage\bin` on Windows. To choose a directory:
 
