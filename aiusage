@@ -235,7 +235,7 @@ macos_keychain_write() {
 macos_keychain_clear() {
   local service="$1"
   command -v security >/dev/null 2>&1 || return 1
-  security delete-generic-password -s "$service" -a "$USER" 2>/dev/null
+  security delete-generic-password -s "$service" -a "$USER" >/dev/null 2>&1
 }
 
 linux_ttl_cache_read() {

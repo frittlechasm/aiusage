@@ -87,6 +87,18 @@ esac
 assert_eq "0" "$(file_mtime "$tmp_dir/nonexistent")" "file_mtime: missing file → 0"
 rm -f "$tmp_mt"
 
+# ── macos_keychain_clear output ───────────────────────────
+
+keychain_output=$(
+  exec 2>&1
+  security() {
+    printf 'deleted keychain metadata\n'
+    printf 'security diagnostic\n' >&2
+  }
+  macos_keychain_clear "aiusage-test-session"
+)
+assert_eq "" "$keychain_output" "keychain_clear: suppresses security command output"
+
 # ── find_jetbrains_quota_file ─────────────────────────────
 
 fake_home=$(mktemp -d)
