@@ -880,14 +880,40 @@ fetch_claude() {
     return
   fi
 
-  local five_hour seven_day five_hour_reset seven_day_reset
-  IFS=$'\t' read -r five_hour seven_day five_hour_reset seven_day_reset < <(
-    printf '%s' "$resp" | jq -r 'def first_reset(w): w.reset_at // w.resets_at // w.resetAt // w.resetsAt // w.window_end // w.window_end_at // w.windowEnd // w.windowEndAt;
-      [(.five_hour.utilization // ""),
-       (.seven_day.utilization // ""),
-       (first_reset(.five_hour) // ""),
-       (first_reset(.seven_day) // "")] | @tsv' 2>/dev/null
-  )
+  local five_hour seven_day five_hour_reset seven_day_reset fable fable_reset
+  IFS=$'\037' read -r \
+    five_hour seven_day five_hour_reset seven_day_reset fable fable_reset < <(
+      printf '%s' "$resp" | jq -r '
+        def object_or_empty: if type == "object" then . else {} end;
+        def utilization(w): (w | object_or_empty).utilization;
+        def first_reset(w):
+          (w | object_or_empty) as $window
+          | $window.reset_at // $window.resets_at // $window.resetAt // $window.resetsAt
+            // $window.window_end // $window.window_end_at // $window.windowEnd // $window.windowEndAt;
+        (.limits // [] | if type == "array" then map(objects) else [] end) as $limits
+        | (first($limits[] | select(.kind == "session")) // {}) as $session
+        | (first($limits[] | select(.kind == "weekly_all")) // {}) as $weekly
+        | (first(
+            $limits[]
+            | select(.kind == "weekly_scoped")
+            | select(try (
+                (.scope.model.display_name // .scope.model.displayName // "")
+                | tostring
+                | test("fable"; "i")
+              ) catch false)
+          ) // {}) as $fable
+        | [
+            (utilization(.five_hour) // utilization(.fiveHour) // $session.percent // $session.utilization // ""),
+            (utilization(.seven_day) // utilization(.sevenDay) // $weekly.percent // $weekly.utilization // ""),
+            (first_reset(.five_hour) // first_reset(.fiveHour) // first_reset($session) // ""),
+            (first_reset(.seven_day) // first_reset(.sevenDay) // first_reset($weekly) // ""),
+            ($fable.percent // $fable.utilization // ""),
+            (first_reset($fable) // "")
+          ]
+        | map(tostring)
+        | join("\u001f")
+      ' 2>/dev/null
+    ) || true
 
   local five_hour_reset_epoch seven_day_reset_epoch
   five_hour_reset_epoch=$(normalize_epoch "$five_hour_reset")
@@ -906,23 +932,6 @@ fetch_claude() {
     draw_unavailable "Weekly"
   fi
   draw_reset "$seven_day_reset_epoch"
-
-  local fable fable_reset
-  IFS=$'\037' read -r fable fable_reset < <(
-    printf '%s' "$resp" | jq -r '
-      (first(
-        (.limits // [] | if type == "array" then . else [] end)[]?
-        | objects
-        | select(.kind == "weekly_scoped")
-        | select(try (
-            (.scope.model.display_name // "")
-            | tostring
-            | test("^(claude )?fable($| )"; "i")
-          ) catch false)
-      )) as $fable
-      | [($fable.percent // ""),
-         ($fable.resets_at // "")] | map(tostring) | join("\u001f")' 2>/dev/null
-  ) || true
 
   if [[ -n "$fable" ]]; then
     draw_bar "Fable" "$fable"

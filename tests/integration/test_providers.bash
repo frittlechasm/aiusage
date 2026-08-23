@@ -35,11 +35,56 @@ assert_not_contains "$out" "Fable" "fetch_claude 200: omits unavailable Fable li
 _tmp=$(make_tmp_home)
 mkdir -p "$_tmp/.claude"
 printf '{"claudeAiOauth":{"accessToken":"fake-token"}}' > "$_tmp/.claude/.credentials.json"
-set_http_response "200" '{"five_hour":{"utilization":"50.0"},"seven_day":{"utilization":"30.0"},"limits":[{"kind":"session","group":"session","percent":50,"scope":null},{"kind":"weekly_all","group":"weekly","percent":30,"scope":null}]}'
+set_http_response "200" '{"five_hour":{"utilization":"50.0"},"seven_day":{"utilization":"30.0"},"limits":[{"kind":"session","group":"session","percent":95,"scope":null},{"kind":"weekly_all","group":"weekly","percent":90,"scope":null}]}'
 HOME="$_tmp"
 out=$(fetch_claude 2>&1) || true
 HOME="$_ORIG_HOME"; cleanup_tmp_home
 assert_not_contains "$out" "Fable" "fetch_claude 200: ignores unscoped current limits"
+five_hour_line=$(printf '%s\n' "$out" | awk '$1 == "5h"')
+weekly_line=$(printf '%s\n' "$out" | awk '$1 == "Weekly"')
+assert_contains "$five_hour_line" "50%" "fetch_claude flat fields: take precedence over structured session"
+assert_contains "$weekly_line" "30%" "fetch_claude flat fields: take precedence over structured weekly"
+
+# Structured limits are the fallback when flat usage windows are absent.
+_tmp=$(make_tmp_home)
+mkdir -p "$_tmp/.claude"
+printf '{"claudeAiOauth":{"accessToken":"fake-token"}}' > "$_tmp/.claude/.credentials.json"
+set_http_response "200" '{"limits":[{"kind":"session","utilization":42,"resetsAt":"2026-07-25T12:00:00Z"},{"kind":"weekly_all","percent":31,"resets_at":"2026-07-30T00:00:00Z"},{"kind":"weekly_scoped","utilization":17,"resetsAt":"2026-07-30T00:00:00Z","scope":{"model":{"displayName":"Claude 3.5 Fable"}}}]}'
+HOME="$_tmp"
+out=$(fetch_claude 2>&1) || true
+HOME="$_ORIG_HOME"; cleanup_tmp_home
+five_hour_line=$(printf '%s\n' "$out" | awk '$1 == "5h"')
+weekly_line=$(printf '%s\n' "$out" | awk '$1 == "Weekly"')
+fable_line=$(printf '%s\n' "$out" | awk '$1 == "Fable"')
+assert_contains "$five_hour_line" "42%" "fetch_claude structured limits: reads session utilization"
+assert_contains "$weekly_line" "31%" "fetch_claude structured limits: reads weekly percent"
+assert_contains "$fable_line" "17%" "fetch_claude structured limits: reads Fable utilization"
+assert_not_contains "$out" "reset: --" "fetch_claude structured limits: reads reset aliases"
+
+# Camel-case flat windows remain compatible with newer response spellings.
+_tmp=$(make_tmp_home)
+mkdir -p "$_tmp/.claude"
+printf '{"claudeAiOauth":{"accessToken":"fake-token"}}' > "$_tmp/.claude/.credentials.json"
+set_http_response "200" '{"fiveHour":{"utilization":22,"resetsAt":"2026-07-25T12:00:00Z"},"sevenDay":{"utilization":44,"resetsAt":"2026-07-30T00:00:00Z"}}'
+HOME="$_tmp"
+out=$(fetch_claude 2>&1) || true
+HOME="$_ORIG_HOME"; cleanup_tmp_home
+five_hour_line=$(printf '%s\n' "$out" | awk '$1 == "5h"')
+weekly_line=$(printf '%s\n' "$out" | awk '$1 == "Weekly"')
+assert_contains "$five_hour_line" "22%" "fetch_claude flat aliases: reads fiveHour"
+assert_contains "$weekly_line" "44%" "fetch_claude flat aliases: reads sevenDay"
+assert_not_contains "$out" "reset: --" "fetch_claude flat aliases: reads resetsAt"
+
+# Malformed flat windows must not suppress valid structured limits.
+_tmp=$(make_tmp_home)
+mkdir -p "$_tmp/.claude"
+printf '{"claudeAiOauth":{"accessToken":"fake-token"}}' > "$_tmp/.claude/.credentials.json"
+set_http_response "200" '{"five_hour":"invalid","seven_day":[],"limits":[{"kind":"session","percent":18},{"kind":"weekly_all","percent":27}]}'
+HOME="$_tmp"
+out=$(fetch_claude 2>&1) || true
+HOME="$_ORIG_HOME"; cleanup_tmp_home
+assert_contains "$out" "18%" "fetch_claude malformed flat windows: preserves structured session"
+assert_contains "$out" "27%" "fetch_claude malformed flat windows: preserves structured weekly"
 
 # HTTP 200: optional Fable weekly limit in the scoped limits array
 _tmp=$(make_tmp_home)
