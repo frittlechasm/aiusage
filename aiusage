@@ -591,7 +591,7 @@ format_remaining() {
 }
 
 draw_reset() {
-  local epoch="${1:-}" mode="${2:-datetime}"
+  local epoch="${1:-}" mode="${2:-datetime}" detail_label_width="${3:-6}"
   local reset_text="--"
 
   if [[ -n "$epoch" ]]; then
@@ -604,7 +604,45 @@ draw_reset() {
     fi
   fi
 
-  printf "  %-*s ${DIM}reset: %s${RESET}\n" "$LABEL_WIDTH" "" "$reset_text"
+  printf "  %-*s ${DIM}%-*s %s${RESET}\n" "$LABEL_WIDTH" "" "$detail_label_width" "reset:" "$reset_text"
+}
+
+draw_banked_resets() {
+  local count="${1:-}" detail_label_width="${2:-7}"
+  shift 2
+  [[ "$count" =~ ^[0-9]+$ ]] || return 0
+  count=$(strip_leading_zeros "$count")
+
+  if (($# > 0)); then
+    local expiry_epoch formatted now rel index=1 label
+    now=$(date +%s)
+    for expiry_epoch in "$@"; do
+      formatted=$(format_epoch_local "$expiry_epoch")
+      [[ -n "$formatted" ]] || continue
+      rel=$(format_remaining $((expiry_epoch - now)))
+      label="banked($index):"
+      printf "  %-*s ${DIM}%-*s %s (%s)${RESET}\n" \
+        "$LABEL_WIDTH" "" "$detail_label_width" "$label" "$formatted" "$rel"
+      index=$((index + 1))
+    done
+    return 0
+  fi
+
+  local banked_text="$count resets"
+  if [[ "$count" == "1" ]]; then
+    banked_text="1 reset"
+  fi
+
+  printf "  %-*s ${DIM}banked: %s${RESET}\n" "$LABEL_WIDTH" "" "$banked_text"
+}
+
+codex_detail_label_width() {
+  local banked_count="${1:-0}" label="reset:"
+  if [[ "$banked_count" =~ ^[0-9]+$ ]] && ((10#$banked_count > 0)); then
+    label="banked($banked_count):"
+  fi
+
+  printf '%s' "${#label}"
 }
 
 SPINNER_FRAMES=('|' '/' '-' '\')

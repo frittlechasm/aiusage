@@ -72,6 +72,26 @@ assert_contains "$out" "5h"                     "draw_unavailable: shows differe
 out=$(draw_unavailable "Usage" "0 resets")
 assert_contains "$out" "· 0 resets"             "draw_unavailable: shows an inline note"
 
+# ── draw_banked_resets ───────────────────────────────────
+
+out=$(draw_banked_resets "2" "10")
+assert_contains "$out" "banked:"                "draw_banked_resets: uses a separate supporting line"
+assert_contains "$out" "2 resets"               "draw_banked_resets: shows the inventory count"
+
+out=$(draw_banked_resets "1" "10")
+assert_contains "$out" "1 reset"                "draw_banked_resets: uses the singular label"
+assert_not_contains "$out" "1 resets"            "draw_banked_resets: avoids plural for one"
+
+out=$(draw_banked_resets "0" "10")
+assert_contains "$out" "0 resets"               "draw_banked_resets: preserves an explicit zero"
+
+out=$(draw_banked_resets "invalid" "10")
+assert_eq "" "$out"                              "draw_banked_resets: omits invalid inventory data"
+
+assert_eq "6" "$(codex_detail_label_width 0)"     "codex detail width: uses reset label without expiries"
+assert_eq "10" "$(codex_detail_label_width 2)"   "codex detail width: fits a single-digit banked index"
+assert_eq "11" "$(codex_detail_label_width 12)"  "codex detail width: grows for multiple index digits"
+
 # ── draw_error ────────────────────────────────────────────
 
 out=$(draw_error "something went wrong")
