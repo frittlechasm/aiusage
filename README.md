@@ -45,6 +45,8 @@ curl -fsSL https://raw.githubusercontent.com/frittlechasm/aiusage/main/install.s
 ./aiusage claude                  # Claude only
 ./aiusage cursor claude           # Cursor + Claude
 ./aiusage codex gemini copilot    # any subset, in the order you want
+./aiusage codex-spark             # Codex Spark only (also: spark)
+./aiusage codex spark             # primary + Spark under one Codex heading
 ./aiusage opencode-go             # OpenCode Go only
 ./aiusage --version               # print the installed version
 ```
@@ -61,7 +63,8 @@ curl -fsSL https://raw.githubusercontent.com/frittlechasm/aiusage/main/install.s
 | Provider | What it shows | Auth source |
 |----------|--------------|-------------|
 | Claude | `5h`, `Weekly`, and optional `Fable` usage bars, extra credit usage | `claude` login credentials |
-| Codex | Available usage windows (for example `5h` or `Weekly`), banked resets, optional Spark limits and extra credits | `~/.codex/auth.json` |
+| Codex | Available usage windows (for example `5h` or `Weekly`), banked reset expiries, and extra credits | `~/.codex/auth.json` |
+| Codex Spark | Spark usage windows shown under the Codex heading, selected with `codex-spark` or `spark` | `~/.codex/auth.json` |
 | Cursor | Monthly credit or request usage | Browser cookies or `CURSOR_COOKIE` |
 | Gemini | Quota usage for Google OAuth / Code Assist | `gemini` login credentials |
 | JetBrains | AI credit usage from local IDE quota state | `AIAssistantQuotaManager2.xml` |
