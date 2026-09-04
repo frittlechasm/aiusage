@@ -17,19 +17,11 @@ set_http_response() {
   }
 }
 
-# with_tmp_home <command...>
-# Run a command with HOME set to a fresh temp directory. Restores HOME after.
-_MOCK_TMP_HOME=""
-make_tmp_home() {
-  _MOCK_TMP_HOME=$(mktemp -d)
-  printf "%s" "$_MOCK_TMP_HOME"
-}
-cleanup_tmp_home() {
-  [[ -n "$_MOCK_TMP_HOME" ]] && rm -rf "$_MOCK_TMP_HOME"
-  _MOCK_TMP_HOME=""
-}
-
 # Cross-platform file permission check: outputs octal mode (e.g. "600")
 file_perms() {
-  stat -f "%OLp" "$1" 2>/dev/null || stat -c "%a" "$1" 2>/dev/null
+  if [[ "$(uname)" == "Darwin" ]]; then
+    stat -f "%OLp" "$1"
+  else
+    stat -c "%a" "$1"
+  fi
 }

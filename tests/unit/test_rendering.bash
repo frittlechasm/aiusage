@@ -9,7 +9,7 @@ source "$(dirname "$0")/../helpers/common.bash"
 
 out=$(draw_bar "5h" 0)
 assert_contains "$out" "5h"                     "draw_bar 0%: shows label"
-assert_contains "$out" "0%"                     "draw_bar 0%: shows percentage"
+assert_eq "0%" "$(printf '%s\n' "$out" | awk '{ print $NF }')" "draw_bar 0%: shows exact percentage"
 assert_contains "$out" "░░░░░░░░░░░░░░░░░░░░"  "draw_bar 0%: all 20 chars empty"
 
 out=$(draw_bar "5h" 100)
@@ -28,7 +28,7 @@ assert_contains "$out" "██████░░░░░░░░░░░░�
 
 # Clamping
 out=$(draw_bar "5h" -5)
-assert_contains "$out" "0%"                     "draw_bar: negative clamped to 0"
+assert_eq "0%" "$(printf '%s\n' "$out" | awk '{ print $NF }')" "draw_bar: negative clamped to 0"
 assert_not_contains "$out" "-5"                 "draw_bar: negative value not shown"
 
 out=$(draw_bar "5h" 150)
@@ -40,11 +40,11 @@ out=$(draw_bar "5h" "72.9")
 assert_contains "$out" "72%"                    "draw_bar: decimal percent truncated"
 
 out=$(draw_bar "Extra" "0.5")
-assert_contains "$out" "0%"                     "draw_bar: fractional under 1% truncated to 0"
+assert_eq "0%" "$(printf '%s\n' "$out" | awk '{ print $NF }')" "draw_bar: fractional under 1% truncated to 0"
 
 # Malformed percent from an API must render as 0%, not crash or evaluate.
 out=$(draw_bar "5h" "abc")
-assert_contains "$out" "0%"                     "draw_bar: non-numeric percent renders as 0"
+assert_eq "0%" "$(printf '%s\n' "$out" | awk '{ print $NF }')" "draw_bar: non-numeric percent renders as 0"
 
 out=$(
   set -e

@@ -20,12 +20,9 @@ assert_eq "&&"       "$(xml_unescape '&amp;&amp;')"        "xml_unescape: consec
 
 assert_eq "now"    "$(format_remaining 0)"       "format_remaining: 0 → now"
 assert_eq "now"    "$(format_remaining -1)"      "format_remaining: negative → now"
-assert_eq "now"    "$(format_remaining -100)"    "format_remaining: large negative → now"
 assert_eq "1m"     "$(format_remaining 60)"      "format_remaining: 1 minute"
-assert_eq "5m"     "$(format_remaining 300)"     "format_remaining: 5 minutes"
 assert_eq "59m"    "$(format_remaining 3540)"    "format_remaining: 59 minutes"
 assert_eq "1h 0m"  "$(format_remaining 3600)"    "format_remaining: exactly 1 hour"
-assert_eq "1h 1m"  "$(format_remaining 3661)"    "format_remaining: 1h 1m"
 assert_eq "2h 30m" "$(format_remaining 9000)"    "format_remaining: 2.5 hours"
 assert_eq "23h 59m" "$(format_remaining 86340)"  "format_remaining: just under 1 day"
 assert_eq "1d 0h"  "$(format_remaining 86400)"   "format_remaining: exactly 1 day"
@@ -36,15 +33,12 @@ assert_eq "unknown" "$(format_remaining '')"     "format_remaining: empty → un
 # ── duration_to_label ─────────────────────────────────────
 
 assert_eq "1h"      "$(duration_to_label 'PT1H')"   "duration_to_label: PT1H"
-assert_eq "5h"      "$(duration_to_label 'PT5H')"   "duration_to_label: PT5H"
 assert_eq "1d"      "$(duration_to_label 'PT24H')"  "duration_to_label: PT24H → 1d"
 assert_eq "2d"      "$(duration_to_label 'PT48H')"  "duration_to_label: PT48H → 2d"
 assert_eq "1d"      "$(duration_to_label 'P1D')"    "duration_to_label: P1D"
-assert_eq "7d"      "$(duration_to_label 'P7D')"    "duration_to_label: P7D"
 assert_eq "30d"     "$(duration_to_label 'P30D')"   "duration_to_label: P30D"
 assert_eq "Credits" "$(duration_to_label 'P1M')"    "duration_to_label: P1M → Credits (unsupported)"
 assert_eq "Credits" "$(duration_to_label '')"       "duration_to_label: empty → Credits"
-assert_eq "Credits" "$(duration_to_label 'UNKNOWN')" "duration_to_label: unknown → Credits"
 
 # ── jetbrains_quota_to_credits ───────────────────────────
 

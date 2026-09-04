@@ -11,20 +11,20 @@ _ORIG_HOME="$HOME"
 # ── fetch_claude ──────────────────────────────────────────
 
 # No credentials file and no keychain entry
-_tmp=$(make_tmp_home)
+_tmp=$(mktemp -d)
 HOME="$_tmp"
-out=$(fetch_claude 2>&1) || true
-HOME="$_ORIG_HOME"; cleanup_tmp_home
+out=$(macos_keychain_read() { return 1; }; fetch_claude 2>&1) || true
+HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 assert_contains "$out" "not logged in"  "fetch_claude: no credentials → error"
 
 # HTTP 200: both windows present
-_tmp=$(make_tmp_home)
+_tmp=$(mktemp -d)
 mkdir -p "$_tmp/.claude"
 printf '{"claudeAiOauth":{"accessToken":"fake-token"}}' > "$_tmp/.claude/.credentials.json"
 set_http_response "200" '{"five_hour":{"utilization":"50.0","reset_at":"2026-03-28T12:00:00Z"},"seven_day":{"utilization":"30.0","reset_at":"2026-04-04T00:00:00Z"}}'
 HOME="$_tmp"
 out=$(fetch_claude 2>&1) || true
-HOME="$_ORIG_HOME"; cleanup_tmp_home
+HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 assert_contains "$out" "5h"     "fetch_claude 200: shows 5h bar"
 assert_contains "$out" "50%"    "fetch_claude 200: shows 50% utilization"
 assert_contains "$out" "Weekly" "fetch_claude 200: shows weekly bar"
@@ -32,13 +32,13 @@ assert_contains "$out" "30%"    "fetch_claude 200: shows 30% utilization"
 assert_not_contains "$out" "Fable" "fetch_claude 200: omits unavailable Fable limit"
 
 # HTTP 200: current limits array without a Fable allowance
-_tmp=$(make_tmp_home)
+_tmp=$(mktemp -d)
 mkdir -p "$_tmp/.claude"
 printf '{"claudeAiOauth":{"accessToken":"fake-token"}}' > "$_tmp/.claude/.credentials.json"
 set_http_response "200" '{"five_hour":{"utilization":"50.0"},"seven_day":{"utilization":"30.0"},"limits":[{"kind":"session","group":"session","percent":95,"scope":null},{"kind":"weekly_all","group":"weekly","percent":90,"scope":null}]}'
 HOME="$_tmp"
 out=$(fetch_claude 2>&1) || true
-HOME="$_ORIG_HOME"; cleanup_tmp_home
+HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 assert_not_contains "$out" "Fable" "fetch_claude 200: ignores unscoped current limits"
 five_hour_line=$(printf '%s\n' "$out" | awk '$1 == "5h"')
 weekly_line=$(printf '%s\n' "$out" | awk '$1 == "Weekly"')
@@ -46,13 +46,13 @@ assert_contains "$five_hour_line" "50%" "fetch_claude flat fields: take preceden
 assert_contains "$weekly_line" "30%" "fetch_claude flat fields: take precedence over structured weekly"
 
 # Structured limits are the fallback when flat usage windows are absent.
-_tmp=$(make_tmp_home)
+_tmp=$(mktemp -d)
 mkdir -p "$_tmp/.claude"
 printf '{"claudeAiOauth":{"accessToken":"fake-token"}}' > "$_tmp/.claude/.credentials.json"
 set_http_response "200" '{"limits":[{"kind":"session","utilization":42,"resetsAt":"2026-07-25T12:00:00Z"},{"kind":"weekly_all","percent":31,"resets_at":"2026-07-30T00:00:00Z"},{"kind":"weekly_scoped","utilization":17,"resetsAt":"2026-07-30T00:00:00Z","scope":{"model":{"displayName":"Claude 3.5 Fable"}}}]}'
 HOME="$_tmp"
 out=$(fetch_claude 2>&1) || true
-HOME="$_ORIG_HOME"; cleanup_tmp_home
+HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 five_hour_line=$(printf '%s\n' "$out" | awk '$1 == "5h"')
 weekly_line=$(printf '%s\n' "$out" | awk '$1 == "Weekly"')
 fable_line=$(printf '%s\n' "$out" | awk '$1 == "Fable"')
@@ -62,13 +62,13 @@ assert_contains "$fable_line" "17%" "fetch_claude structured limits: reads Fable
 assert_not_contains "$out" "reset: --" "fetch_claude structured limits: reads reset aliases"
 
 # Camel-case flat windows remain compatible with newer response spellings.
-_tmp=$(make_tmp_home)
+_tmp=$(mktemp -d)
 mkdir -p "$_tmp/.claude"
 printf '{"claudeAiOauth":{"accessToken":"fake-token"}}' > "$_tmp/.claude/.credentials.json"
 set_http_response "200" '{"fiveHour":{"utilization":22,"resetsAt":"2026-07-25T12:00:00Z"},"sevenDay":{"utilization":44,"resetsAt":"2026-07-30T00:00:00Z"}}'
 HOME="$_tmp"
 out=$(fetch_claude 2>&1) || true
-HOME="$_ORIG_HOME"; cleanup_tmp_home
+HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 five_hour_line=$(printf '%s\n' "$out" | awk '$1 == "5h"')
 weekly_line=$(printf '%s\n' "$out" | awk '$1 == "Weekly"')
 assert_contains "$five_hour_line" "22%" "fetch_claude flat aliases: reads fiveHour"
@@ -76,18 +76,18 @@ assert_contains "$weekly_line" "44%" "fetch_claude flat aliases: reads sevenDay"
 assert_not_contains "$out" "reset: --" "fetch_claude flat aliases: reads resetsAt"
 
 # Malformed flat windows must not suppress valid structured limits.
-_tmp=$(make_tmp_home)
+_tmp=$(mktemp -d)
 mkdir -p "$_tmp/.claude"
 printf '{"claudeAiOauth":{"accessToken":"fake-token"}}' > "$_tmp/.claude/.credentials.json"
 set_http_response "200" '{"five_hour":"invalid","seven_day":[],"limits":[{"kind":"session","percent":18},{"kind":"weekly_all","percent":27}]}'
 HOME="$_tmp"
 out=$(fetch_claude 2>&1) || true
-HOME="$_ORIG_HOME"; cleanup_tmp_home
+HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 assert_contains "$out" "18%" "fetch_claude malformed flat windows: preserves structured session"
 assert_contains "$out" "27%" "fetch_claude malformed flat windows: preserves structured weekly"
 
 # HTTP 200: optional Fable weekly limit in the scoped limits array
-_tmp=$(make_tmp_home)
+_tmp=$(mktemp -d)
 mkdir -p "$_tmp/.claude"
 printf '{"claudeAiOauth":{"accessToken":"fake-token"}}' > "$_tmp/.claude/.credentials.json"
 set_http_response "200" '{"five_hour":{"utilization":"50.0","resets_at":"2026-07-25T12:00:00Z"},"seven_day":{"utilization":"30.0","resets_at":"2026-07-30T00:00:00Z"},"limits":[{"kind":"session","group":"session","percent":50,"resets_at":"2026-07-25T12:00:00Z","scope":"unexpected"},{"kind":"weekly_all","group":"weekly","percent":30,"resets_at":"2026-07-30T00:00:00Z","scope":null},{"kind":"weekly_scoped","group":"weekly","percent":17,"resets_at":"2026-07-30T00:00:00Z","scope":{"model":{"id":null,"display_name":"Fable"},"surface":null}}]}'
@@ -102,51 +102,51 @@ assert_not_contains "$out" "reset: --" "fetch_claude 200: parses the Fable reset
 # A present Fable allowance remains visible when none of it has been used
 set_http_response "200" '{"five_hour":{"utilization":"50.0"},"seven_day":{"utilization":"30.0"},"limits":[{"kind":"weekly_scoped","group":"weekly","percent":0,"resets_at":"2026-07-30T00:00:00Z","scope":{"model":{"display_name":"Claude Fable 5"}}}]}'
 out=$(fetch_claude 2>&1) || true
-HOME="$_ORIG_HOME"; cleanup_tmp_home
+HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 fable_line=$(printf '%s\n' "$out" | awk '$1 == "Fable"')
 assert_contains "$fable_line" "0%" "fetch_claude 200: shows zero Fable usage"
 
 # HTTP 401: session expired
-_tmp=$(make_tmp_home)
+_tmp=$(mktemp -d)
 mkdir -p "$_tmp/.claude"
 printf '{"claudeAiOauth":{"accessToken":"fake-token"}}' > "$_tmp/.claude/.credentials.json"
 set_http_response "401" ""
 HOME="$_tmp"
 out=$(fetch_claude 2>&1) || true
-HOME="$_ORIG_HOME"; cleanup_tmp_home
+HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 assert_contains "$out" "session expired" "fetch_claude 401: session expired message"
 
 # HTTP 000: network error
-_tmp=$(make_tmp_home)
+_tmp=$(mktemp -d)
 mkdir -p "$_tmp/.claude"
 printf '{"claudeAiOauth":{"accessToken":"fake-token"}}' > "$_tmp/.claude/.credentials.json"
 set_http_response "000" ""
 HOME="$_tmp"
 out=$(fetch_claude 2>&1) || true
-HOME="$_ORIG_HOME"; cleanup_tmp_home
+HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 assert_contains "$out" "network error"   "fetch_claude 000: network error message"
 
 # ── fetch_codex ───────────────────────────────────────────
 
 # No credentials
-_tmp=$(make_tmp_home)
+_tmp=$(mktemp -d)
 HOME="$_tmp"
 out=$(fetch_codex 2>&1) || true
 spark_out=$(fetch_codex_spark 2>&1) || true
 combined_out=$(fetch_codex_all 2>&1) || true
-HOME="$_ORIG_HOME"; cleanup_tmp_home
+HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 assert_contains "$out" "not logged in"   "fetch_codex: no credentials → error"
 assert_contains "$spark_out" "not logged in" "fetch_codex_spark: no credentials → error"
 assert_contains "$combined_out" "not logged in" "fetch_codex_all: no credentials → error"
 
 # HTTP 200
-_tmp=$(make_tmp_home)
+_tmp=$(mktemp -d)
 mkdir -p "$_tmp/.codex"
 printf '{"tokens":{"access_token":"fake","account_id":"fake-id"}}' > "$_tmp/.codex/auth.json"
 set_http_response "200" '{"rate_limit":{"primary_window":{"used_percent":"45.0"},"secondary_window":{"used_percent":"20.0"}}}'
 HOME="$_tmp"
 out=$(fetch_codex 2>&1) || true
-HOME="$_ORIG_HOME"; cleanup_tmp_home
+HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 assert_contains "$out" "5h"     "fetch_codex 200: shows 5h bar"
 assert_contains "$out" "45%"    "fetch_codex 200: shows 45%"
 assert_contains "$out" "Weekly" "fetch_codex 200: shows weekly bar"
@@ -154,41 +154,41 @@ assert_contains "$out" "20%"    "fetch_codex 200: shows 20%"
 assert_not_contains "$out" "banked:" "fetch_codex 200: omits unavailable banked reset data"
 
 # HTTP 200 with banked reset inventory; applicable count is zero until a limit is reached.
-_tmp=$(make_tmp_home)
+_tmp=$(mktemp -d)
 mkdir -p "$_tmp/.codex"
 printf '{"tokens":{"access_token":"fake","account_id":"fake-id"}}' > "$_tmp/.codex/auth.json"
 set_http_response "200" '{"rate_limit":{"primary_window":{"used_percent":"45.0"},"secondary_window":{"used_percent":"20.0"}},"rate_limit_reset_credits":{"available_count":3,"applicable_available_count":0}}'
 HOME="$_tmp"
 out=$(fetch_codex 2>&1) || true
-HOME="$_ORIG_HOME"; cleanup_tmp_home
+HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 assert_contains "$out" "banked: 3 resets" "fetch_codex banked resets: shows available inventory separately"
 assert_not_contains "$out" "banked: 0 resets" "fetch_codex banked resets: ignores gated applicable count"
 banked_count=$(printf '%s\n' "$out" | awk '/banked: 3 resets/ { count++ } END { print count + 0 }')
 assert_eq "1" "$banked_count" "fetch_codex banked resets: shows inventory once"
 
 # A single banked reset uses the singular label.
-_tmp=$(make_tmp_home)
+_tmp=$(mktemp -d)
 mkdir -p "$_tmp/.codex"
 printf '{"tokens":{"access_token":"fake","account_id":"fake-id"}}' > "$_tmp/.codex/auth.json"
 set_http_response "200" '{"rate_limit":{"primary_window":{"used_percent":"45.0"}},"rate_limit_reset_credits":{"available_count":1,"applicable_available_count":0}}'
 HOME="$_tmp"
 out=$(fetch_codex 2>&1) || true
-HOME="$_ORIG_HOME"; cleanup_tmp_home
+HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 assert_contains "$out" "banked: 1 reset" "fetch_codex banked resets: uses singular label"
 assert_not_contains "$out" "banked: 1 resets" "fetch_codex banked resets: avoids plural for one"
 
 # An explicit zero remains visible instead of being treated as missing.
-_tmp=$(make_tmp_home)
+_tmp=$(mktemp -d)
 mkdir -p "$_tmp/.codex"
 printf '{"tokens":{"access_token":"fake","account_id":"fake-id"}}' > "$_tmp/.codex/auth.json"
 set_http_response "200" '{"rate_limit":{"primary_window":{"used_percent":"45.0"}},"rate_limit_reset_credits":{"available_count":0,"applicable_available_count":0}}'
 HOME="$_tmp"
 out=$(fetch_codex 2>&1) || true
-HOME="$_ORIG_HOME"; cleanup_tmp_home
+HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 assert_contains "$out" "banked: 0 resets" "fetch_codex banked resets: shows explicit zero inventory"
 
 # The detailed reset-credit response supplies every available expiry.
-_tmp=$(make_tmp_home)
+_tmp=$(mktemp -d)
 mkdir -p "$_tmp/.codex"
 printf '{"tokens":{"access_token":"fake","account_id":"fake-id"}}' > "$_tmp/.codex/auth.json"
 _codex_now=$(date +%s)
@@ -213,7 +213,7 @@ http_json() {
 HOME="$_tmp"
 out=$(fetch_codex 2>&1) || true
 spark_out=$(fetch_codex_spark 2>&1) || true
-HOME="$_ORIG_HOME"; cleanup_tmp_home
+HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 assert_contains "$out" "banked(1): $(format_epoch_local "$_codex_first_expiry") (1d 1h)" "fetch_codex banked expiry: shows the first available expiry"
 assert_contains "$out" "banked(2): $(format_epoch_local "$_codex_later_expiry") (2d 2h)" "fetch_codex banked expiry: shows the second available expiry"
 assert_not_contains "$out" "$(format_epoch_local "$((_codex_now + 60))")" "fetch_codex banked expiry: omits redeemed credits"
@@ -227,14 +227,14 @@ assert_contains "$spark_reset_line" "reset: $(format_epoch_local "$_codex_spark_
 assert_not_contains "$spark_reset_line" "reset:     " "fetch_codex banked expiry: does not align Spark with the banked group"
 
 # HTTP 200 with the temporary weekly-only response shape
-_tmp=$(make_tmp_home)
+_tmp=$(mktemp -d)
 mkdir -p "$_tmp/.codex"
 printf '{"tokens":{"access_token":"fake","account_id":"fake-id"}}' > "$_tmp/.codex/auth.json"
 set_http_response "200" '{"rate_limit":{"primary_window":{"used_percent":4,"limit_window_seconds":604800,"reset_at":1784524085},"secondary_window":null},"additional_rate_limits":[{"limit_name":"GPT-5.3-Codex-Spark","metered_feature":"codex_bengalfox","rate_limit":{"primary_window":{"used_percent":0,"limit_window_seconds":604800,"reset_at":1784601644},"secondary_window":null}}]}'
 HOME="$_tmp"
 out=$(fetch_codex 2>&1) || true
 spark_out=$(fetch_codex_spark 2>&1) || true
-HOME="$_ORIG_HOME"; cleanup_tmp_home
+HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 assert_contains "$out" "Weekly"  "fetch_codex weekly-only: labels the primary window from its duration"
 assert_contains "$out" "4%"      "fetch_codex weekly-only: shows weekly usage"
 assert_not_contains "$out" "  5h" "fetch_codex weekly-only: omits the absent 5h window"
@@ -248,7 +248,7 @@ assert_not_contains "$out" "reset: --" "fetch_codex weekly-only: preserves reset
 assert_not_contains "$spark_out" "reset: --" "fetch_codex_spark weekly-only: preserves reset timestamps"
 
 # Relative reset durations are resolved from one request-time reference epoch.
-_tmp=$(make_tmp_home)
+_tmp=$(mktemp -d)
 mkdir -p "$_tmp/.codex"
 printf '{"tokens":{"access_token":"fake","account_id":"fake-id"}}' > "$_tmp/.codex/auth.json"
 set_http_response "200" '{"rate_limit":{"primary_window":{"used_percent":45,"reset_at":2100000000,"reset_after_seconds":60},"secondary_window":{"used_percent":20,"reset_after_seconds":120}},"additional_rate_limits":[{"limit_name":"GPT-5.3-Codex-Spark","rate_limit":{"primary_window":{"used_percent":15,"resetAfterSeconds":90},"secondary_window":{"used_percent":5,"reset_after_seconds":150}}}]}'
@@ -265,7 +265,7 @@ out=$(
   fetch_codex 2>&1
   fetch_codex_spark 2>&1
 ) || true
-cleanup_tmp_home
+rm -rf "$_tmp"
 assert_contains "$out" "reset_epoch=2100000000" "fetch_codex relative resets: prefers absolute primary reset"
 assert_not_contains "$out" "reset_epoch=2000000060" "fetch_codex relative resets: ignores primary fallback when absolute exists"
 assert_contains "$out" "reset_epoch=2000000120" "fetch_codex relative resets: resolves secondary reset"
@@ -273,7 +273,7 @@ assert_contains "$out" "reset_epoch=2000000090" "fetch_codex relative resets: su
 assert_contains "$out" "reset_epoch=2000000150" "fetch_codex relative resets: resolves Spark secondary reset"
 
 # HTTP 200 with optional Spark limits and account credits
-_tmp=$(make_tmp_home)
+_tmp=$(mktemp -d)
 mkdir -p "$_tmp/.codex"
 printf '{"tokens":{"access_token":"fake","account_id":"fake-id"}}' > "$_tmp/.codex/auth.json"
 set_http_response "200" '{"rate_limit":{"primary_window":{"used_percent":"45.0","reset_at":"2026-03-28T12:00:00Z"},"secondary_window":{"used_percent":"20.0","reset_at":"2026-04-04T00:00:00Z"}},"additional_rate_limits":[{"limit_name":"GPT-5.3-Codex-Spark","metered_feature":"codex_spark","rate_limit":{"primary_window":{"used_percent":"15.0","reset_at":"2026-03-28T13:00:00Z"},"secondary_window":{"used_percent":"5.0","reset_at":"2026-04-05T00:00:00Z"}}}],"credits":{"has_credits":true,"balance":"12","unlimited":false}}'
@@ -281,7 +281,7 @@ HOME="$_tmp"
 out=$(fetch_codex 2>&1) || true
 spark_out=$(fetch_codex_spark 2>&1) || true
 combined_out=$(fetch_codex_all 2>&1) || true
-HOME="$_ORIG_HOME"; cleanup_tmp_home
+HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 assert_not_contains "$out" "15%" "fetch_codex 200: hides Spark usage"
 assert_contains "$out" "Extra"    "fetch_codex 200: shows optional extra credits"
 assert_contains "$out" "12 credits available" "fetch_codex 200: shows credit balance"
@@ -295,45 +295,45 @@ assert_contains "$combined_out" "Spark 5h" "fetch_codex_all 200: shows Spark in 
 assert_contains "$combined_out" "12 credits available" "fetch_codex_all 200: shows primary Codex credits"
 
 # HTTP 200 with assigned but exhausted account credits
-_tmp=$(make_tmp_home)
+_tmp=$(mktemp -d)
 mkdir -p "$_tmp/.codex"
 printf '{"tokens":{"access_token":"fake","account_id":"fake-id"}}' > "$_tmp/.codex/auth.json"
 set_http_response "200" '{"rate_limit":{"primary_window":{"used_percent":"45.0"},"secondary_window":{"used_percent":"20.0"}},"credits":{"has_credits":true,"balance":"0","unlimited":false}}'
 HOME="$_tmp"
 out=$(fetch_codex 2>&1) || true
-HOME="$_ORIG_HOME"; cleanup_tmp_home
+HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 assert_contains "$out" "Extra" "fetch_codex 200: shows assigned extra credits with zero balance"
 assert_contains "$out" "0 credits available" "fetch_codex 200: shows exhausted credit balance"
 
 # Spark-only output keeps resets even when their timestamps match primary Codex.
-_tmp=$(make_tmp_home)
+_tmp=$(mktemp -d)
 mkdir -p "$_tmp/.codex"
 printf '{"tokens":{"access_token":"fake","account_id":"fake-id"}}' > "$_tmp/.codex/auth.json"
 set_http_response "200" '{"rate_limit":{"primary_window":{"used_percent":"45.0","reset_at":"2026-03-28T12:00:00Z"},"secondary_window":{"used_percent":"20.0","reset_at":"2026-04-04T00:00:00Z"}},"additional_rate_limits":[{"limit_name":"GPT-5.3-Codex-Spark","rate_limit":{"primary_window":{"used_percent":"15.0","reset_at":"2026-03-28T12:00:00Z"},"secondary_window":{"used_percent":"5.0","reset_at":"2026-04-04T00:00:00Z"}}}]}'
 HOME="$_tmp"
 out=$(fetch_codex_spark 2>&1) || true
-HOME="$_ORIG_HOME"; cleanup_tmp_home
+HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 reset_count=$(printf '%s\n' "$out" | awk '/reset:/ { count++ } END { print count + 0 }')
 assert_eq "2" "$reset_count" "fetch_codex_spark 200: keeps reset lines independent of hidden primary windows"
 
 # A valid Codex response without Spark limits reports Spark as unavailable.
-_tmp=$(make_tmp_home)
+_tmp=$(mktemp -d)
 mkdir -p "$_tmp/.codex"
 printf '{"tokens":{"access_token":"fake","account_id":"fake-id"}}' > "$_tmp/.codex/auth.json"
 set_http_response "200" '{"rate_limit":{"primary_window":{"used_percent":"45.0"}}}'
 HOME="$_tmp"
 out=$(fetch_codex_spark 2>&1) || true
-HOME="$_ORIG_HOME"; cleanup_tmp_home
+HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 assert_contains "$out" "Spark usage data is unavailable" "fetch_codex_spark: reports missing Spark limits"
 
 # HTTP 401
-_tmp=$(make_tmp_home)
+_tmp=$(mktemp -d)
 mkdir -p "$_tmp/.codex"
 printf '{"tokens":{"access_token":"fake"}}' > "$_tmp/.codex/auth.json"
 set_http_response "401" ""
 HOME="$_tmp"
 out=$(fetch_codex 2>&1) || true
-HOME="$_ORIG_HOME"; cleanup_tmp_home
+HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 assert_contains "$out" "session expired" "fetch_codex 401: session expired message"
 
 # ── fetch_cursor ──────────────────────────────────────────
@@ -442,23 +442,23 @@ assert_contains "$out" "session expired" "fetch_cursor 401: session expired mess
 # ── fetch_gemini ──────────────────────────────────────────
 
 # No credentials file
-_tmp=$(make_tmp_home)
+_tmp=$(mktemp -d)
 HOME="$_tmp"
 out=$(fetch_gemini 2>&1) || true
-HOME="$_ORIG_HOME"; cleanup_tmp_home
+HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 assert_contains "$out" "not logged in"   "fetch_gemini: no credentials → error"
 
 # Expired token (expiry_date in milliseconds, far in the past)
-_tmp=$(make_tmp_home)
+_tmp=$(mktemp -d)
 mkdir -p "$_tmp/.gemini"
 printf '{"access_token":"fake","expiry_date":1000}' > "$_tmp/.gemini/oauth_creds.json"
 HOME="$_tmp"
 out=$(fetch_gemini 2>&1) || true
-HOME="$_ORIG_HOME"; cleanup_tmp_home
+HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 assert_contains "$out" "session expired" "fetch_gemini: expired token → error"
 
 # The summary reset must come from the bucket that supplies the maximum usage.
-_tmp=$(make_tmp_home)
+_tmp=$(mktemp -d)
 mkdir -p "$_tmp/.gemini"
 printf '{"access_token":"fake","expiry_date":4102444800000}' > "$_tmp/.gemini/oauth_creds.json"
 _gemini_quota_body='{"buckets":[{"modelId":"gemini-3-flash-preview","remainingFraction":0.2,"resetTime":"2030-01-02T00:00:00Z"},{"modelId":"gemini-3-pro-preview","remainingFraction":0.6,"resetTime":"2030-02-02T00:00:00Z"}]}'
@@ -490,7 +490,7 @@ out=$(
   HOME="$_tmp"
   fetch_gemini 2>&1
 ) || true
-cleanup_tmp_home
+rm -rf "$_tmp"
 assert_contains "$out" "Flash 80%" "fetch_gemini summary: keeps grouped Flash usage"
 assert_contains "$out" "Pro 40%" "fetch_gemini summary: keeps grouped Pro usage"
 assert_contains "$out" "reset_epoch=1893542400" "fetch_gemini summary: uses reset from maximum group"
@@ -652,13 +652,13 @@ assert_contains "$out" "network error"   "fetch_copilot 000: network error messa
 # ── fetch_opencode_go ───────────────────────────────────────
 
 # No environment key or OpenCode auth entry.
-_tmp=$(make_tmp_home)
+_tmp=$(mktemp -d)
 out=$(HOME="$_tmp" XDG_DATA_HOME= OPENCODE_GO_API_KEY= OPENCODE_API_KEY= fetch_opencode_go 2>&1) || true
 rm -rf "$_tmp"
 assert_contains "$out" "not logged in" "fetch_opencode_go: no key → error"
 
 # Resolve the provider-specific key from OpenCode's default auth store.
-_tmp=$(make_tmp_home)
+_tmp=$(mktemp -d)
 mkdir -p "$_tmp/.local/share/opencode"
 printf '{"opencode-go":{"type":"api","key":"file-key"}}' >"$_tmp/.local/share/opencode/auth.json"
 key=$(HOME="$_tmp" XDG_DATA_HOME= OPENCODE_GO_API_KEY= OPENCODE_API_KEY= _opencode_go_resolve_key)
@@ -666,7 +666,7 @@ rm -rf "$_tmp"
 assert_eq "file-key" "$key" "opencode-go auth: reads default OpenCode auth store"
 
 # Respect XDG_DATA_HOME and ignore credentials with the wrong auth type.
-_tmp=$(make_tmp_home)
+_tmp=$(mktemp -d)
 mkdir -p "$_tmp/xdg/opencode"
 printf '{"opencode-go":{"type":"oauth","key":"wrong-type"}}' >"$_tmp/xdg/opencode/auth.json"
 key=$(HOME="$_tmp" XDG_DATA_HOME="$_tmp/xdg" OPENCODE_GO_API_KEY= OPENCODE_API_KEY= _opencode_go_resolve_key) || true
@@ -677,7 +677,7 @@ rm -rf "$_tmp"
 assert_eq "xdg-key" "$key" "opencode-go auth: respects XDG_DATA_HOME"
 
 # `opencode auth login` stores the API key under the "opencode" provider id.
-_tmp=$(make_tmp_home)
+_tmp=$(mktemp -d)
 mkdir -p "$_tmp/.local/share/opencode"
 printf '{"anthropic":{"type":"oauth"},"opencode":{"type":"api","key":"login-key"}}' >"$_tmp/.local/share/opencode/auth.json"
 key=$(HOME="$_tmp" XDG_DATA_HOME= OPENCODE_GO_API_KEY= OPENCODE_API_KEY= _opencode_go_resolve_key)
@@ -772,7 +772,7 @@ assert_contains "$out" "API key is invalid" "fetch_opencode_go 401: invalid key 
 assert_contains "$out" "OPENCODE_GO_API_KEY" "fetch_opencode_go 401 env key: names the environment variable"
 
 # 401 with no environment key points at opencode auth login.
-_tmp=$(make_tmp_home)
+_tmp=$(mktemp -d)
 mkdir -p "$_tmp/.local/share/opencode"
 printf '{"opencode-go":{"type":"api","key":"file-key"}}' >"$_tmp/.local/share/opencode/auth.json"
 out=$(HOME="$_tmp" XDG_DATA_HOME= OPENCODE_GO_API_KEY= OPENCODE_API_KEY= fetch_opencode_go 2>&1) || true
