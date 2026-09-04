@@ -307,10 +307,19 @@ draw_http_error() {
 
 ALL_PROVIDERS=(claude codex cursor gemini jetbrains copilot opencode-go)
 
+provider_canonical_slug() {
+  case "$1" in
+  spark) printf "codex-spark" ;;
+  *) printf "%s" "$1" ;;
+  esac
+}
+
 provider_label() {
   case "$1" in
   claude) printf "Claude" ;;
   codex) printf "Codex" ;;
+  codex-spark) printf "Codex" ;;
+  codex-all) printf "Codex" ;;
   cursor) printf "Cursor" ;;
   gemini) printf "Gemini" ;;
   jetbrains) printf "JetBrains" ;;
@@ -324,6 +333,8 @@ provider_fetch_fn() {
   case "$1" in
   claude) printf "fetch_claude" ;;
   codex) printf "fetch_codex" ;;
+  codex-spark) printf "fetch_codex_spark" ;;
+  codex-all) printf "fetch_codex_all" ;;
   cursor) printf "fetch_cursor" ;;
   gemini) printf "fetch_gemini" ;;
   jetbrains) printf "fetch_jetbrains" ;;
@@ -335,7 +346,7 @@ provider_fetch_fn() {
 
 provider_is_known() {
   case "$1" in
-  claude | codex | cursor | gemini | jetbrains | copilot | opencode-go) return 0 ;;
+  claude | codex | codex-spark | cursor | gemini | jetbrains | copilot | opencode-go) return 0 ;;
   *) return 1 ;;
   esac
 }
@@ -355,6 +366,8 @@ provider_unavailable_message() {
   case "$1" in
   claude) printf "claude is not installed" ;;
   codex) printf "codex is not installed" ;;
+  codex-spark) printf "codex is not installed" ;;
+  codex-all) printf "codex is not installed" ;;
   cursor) printf "Cursor not available — set CURSOR_COOKIE or ensure a supported browser (Firefox/Chrome/Arc/Brave/Edge) with sqlite3 is present" ;;
   gemini) printf "gemini is not installed" ;;
   jetbrains) printf "jetbrains usage data is unavailable" ;;
@@ -367,7 +380,7 @@ provider_unavailable_message() {
 provider_available() {
   case "$1" in
   claude) command -v claude >/dev/null 2>&1 ;;
-  codex) command -v codex >/dev/null 2>&1 ;;
+  codex | codex-spark | codex-all) command -v codex >/dev/null 2>&1 ;;
   cursor) [[ -n "${CURSOR_COOKIE:-}" ]] || _cursor_has_browser ;;
   gemini) command -v gemini >/dev/null 2>&1 ;;
   jetbrains) [[ -n "$(find_jetbrains_quota_file)" ]] ;;
@@ -1014,6 +1027,7 @@ fetch_claude() {
 # ── codex ───────────────────────────────────────────────
 
 fetch_codex() {
+  local view="${1:-primary}"
   local creds_file="${CODEX_HOME:-$HOME/.codex}/auth.json"
   local token="" account_id=""
 
@@ -1062,33 +1076,53 @@ fetch_codex() {
   primary_reset_epoch=$(codex_resolve_reset_epoch "$primary_reset" "$primary_reset_after" "$reset_reference_epoch")
   secondary_reset_epoch=$(codex_resolve_reset_epoch "$secondary_reset" "$secondary_reset_after" "$reset_reference_epoch")
 
-  local primary_label secondary_label
-  primary_label=$(codex_window_label "$primary_seconds" "5h")
-  secondary_label=$(codex_window_label "$secondary_seconds" "Weekly")
+  # The usage response only exposes the inventory count. Fetch individual
+  # credits to find every expiry, but keep the count useful if this
+  # undocumented endpoint is unavailable or changes shape.
+  local banked_expiry_epochs=()
+  if [[ "$view" != "spark" && "$banked_resets" =~ ^[0-9]+$ ]] && ((10#$banked_resets > 0)); then
+    local banked_resp banked_status raw_expiry expiry_epoch
+    http_json "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits" "" "${headers[@]}"
+    banked_resp="$HTTP_BODY"
+    banked_status="$HTTP_STATUS"
 
-  local banked_resets_note=""
-  if [[ "$banked_resets" =~ ^[0-9]+$ ]]; then
-    if [[ "$banked_resets" == "1" ]]; then
-      banked_resets_note="1 reset"
-    else
-      banked_resets_note="$banked_resets resets"
+    if [[ "$banked_status" == 2* && -n "$banked_resp" ]]; then
+      while IFS= read -r raw_expiry; do
+        expiry_epoch=$(normalize_epoch "$raw_expiry")
+        [[ "$expiry_epoch" =~ ^[0-9]+$ ]] || continue
+        banked_expiry_epochs+=("$expiry_epoch")
+      done < <(
+        printf '%s' "$banked_resp" |
+          jq -r '[.credits[]? | select(.status == "available") | .expires_at // empty] | sort | .[]' 2>/dev/null || true
+      )
     fi
   fi
 
-  if [[ -n "$primary" ]]; then
-    draw_bar "$primary_label" "$primary" "$banked_resets_note"
-    banked_resets_note=""
-    draw_reset "$primary_reset_epoch" "$(codex_window_reset_mode "$primary_seconds" "time")"
-  fi
+  local primary_label secondary_label detail_label_width
+  primary_label=$(codex_window_label "$primary_seconds" "5h")
+  secondary_label=$(codex_window_label "$secondary_seconds" "Weekly")
+  detail_label_width=$(codex_detail_label_width "${#banked_expiry_epochs[@]}")
 
-  if [[ -n "$secondary" ]]; then
-    draw_bar "$secondary_label" "$secondary" "$banked_resets_note"
-    banked_resets_note=""
-    draw_reset "$secondary_reset_epoch" "$(codex_window_reset_mode "$secondary_seconds" "datetime")"
-  fi
+  if [[ "$view" != "spark" ]]; then
+    if [[ -n "$primary" ]]; then
+      draw_bar "$primary_label" "$primary"
+      draw_reset "$primary_reset_epoch" "$(codex_window_reset_mode "$primary_seconds" "time")" "$detail_label_width"
+    fi
 
-  if [[ -z "$primary" && -z "$secondary" ]]; then
-    draw_unavailable "Usage" "$banked_resets_note"
+    if [[ -n "$secondary" ]]; then
+      draw_bar "$secondary_label" "$secondary"
+      draw_reset "$secondary_reset_epoch" "$(codex_window_reset_mode "$secondary_seconds" "datetime")" "$detail_label_width"
+    fi
+
+    if [[ -z "$primary" && -z "$secondary" ]]; then
+      draw_unavailable "Usage"
+    fi
+
+    if ((${#banked_expiry_epochs[@]} > 0)); then
+      draw_banked_resets "$banked_resets" "$detail_label_width" "${banked_expiry_epochs[@]}"
+    else
+      draw_banked_resets "$banked_resets" "$detail_label_width"
+    fi
   fi
 
   local spark_primary spark_primary_seconds spark_primary_reset spark_primary_reset_after
@@ -1110,17 +1144,17 @@ fetch_codex() {
          ($spark.rate_limit.secondary_window.reset_after_seconds // $spark.rate_limit.secondary_window.resetAfterSeconds // "")] | map(tostring) | join("\u001f")' 2>/dev/null
   )
 
-  if [[ -n "$spark_primary" || -n "$spark_secondary" ]]; then
+  if [[ "$view" != "primary" && ( -n "$spark_primary" || -n "$spark_secondary" ) ]]; then
     local spark_primary_reset_epoch spark_secondary_reset_epoch
     spark_primary_reset_epoch=$(codex_resolve_reset_epoch "$spark_primary_reset" "$spark_primary_reset_after" "$reset_reference_epoch")
     spark_secondary_reset_epoch=$(codex_resolve_reset_epoch "$spark_secondary_reset" "$spark_secondary_reset_after" "$reset_reference_epoch")
 
-    printf "\n"
+    [[ "$view" == "both" ]] && printf "\n"
     if [[ -n "$spark_primary" ]]; then
       local spark_primary_label
       spark_primary_label=$(codex_spark_window_label "$(codex_window_label "$spark_primary_seconds" "5h")")
       draw_bar "$spark_primary_label" "$spark_primary"
-      if [[ -n "$spark_primary_reset_epoch" && "$spark_primary_reset_epoch" != "$primary_reset_epoch" ]]; then
+      if [[ -n "$spark_primary_reset_epoch" ]]; then
         draw_reset "$spark_primary_reset_epoch" "$(codex_window_reset_mode "$spark_primary_seconds" "time")"
       fi
     fi
@@ -1129,10 +1163,18 @@ fetch_codex() {
       local spark_secondary_label
       spark_secondary_label=$(codex_spark_window_label "$(codex_window_label "$spark_secondary_seconds" "Weekly")")
       draw_bar "$spark_secondary_label" "$spark_secondary"
-      if [[ -n "$spark_secondary_reset_epoch" && "$spark_secondary_reset_epoch" != "$secondary_reset_epoch" ]]; then
+      if [[ -n "$spark_secondary_reset_epoch" ]]; then
         draw_reset "$spark_secondary_reset_epoch" "$(codex_window_reset_mode "$spark_secondary_seconds" "datetime")"
       fi
     fi
+  fi
+
+  if [[ "$view" != "primary" ]]; then
+    if [[ -z "$spark_primary" && -z "$spark_secondary" ]]; then
+      [[ "$view" == "both" ]] && printf "\n"
+      draw_error "Spark usage data is unavailable"
+    fi
+    [[ "$view" == "spark" ]] && return 0
   fi
 
   local has_credits credit_balance credits_unlimited
@@ -1149,6 +1191,14 @@ fetch_codex() {
     printf "\n"
     draw_credit_balance_line "Extra" "$credit_balance"
   fi
+}
+
+fetch_codex_spark() {
+  fetch_codex "spark"
+}
+
+fetch_codex_all() {
+  fetch_codex "both"
 }
 
 # ── cursor ──────────────────────────────────────────────
@@ -2261,6 +2311,7 @@ Usage: aiusage [provider ...]
 Providers:
   claude       Show Claude usage
   codex        Show Codex usage
+  codex-spark  Show Codex Spark usage (alias: spark)
   cursor       Show Cursor usage (auto-detects from browser or CURSOR_COOKIE)
   gemini       Show Gemini CLI usage
   jetbrains    Show JetBrains AI usage
@@ -2295,6 +2346,7 @@ run_from_args() {
       run_all=1
       ;;
     *)
+      arg=$(provider_canonical_slug "$arg")
       if ! provider_is_known "$arg"; then
         printf "Unknown provider: %s\n\n" "$arg" >&2
         usage >&2
@@ -2312,6 +2364,26 @@ run_from_args() {
     check_required_dependencies
     run_all_parallel
     return
+  fi
+
+  # Codex and Spark share one upstream response and one display section.
+  # Collapse an explicit pair into one internal provider, preserving the
+  # position of whichever selector appeared first.
+  if provider_list_contains "codex" "${requested[@]}" &&
+    provider_list_contains "codex-spark" "${requested[@]}"; then
+    local combined=() combined_added=0 provider
+    for provider in "${requested[@]}"; do
+      case "$provider" in
+      codex | codex-spark)
+        if ((combined_added == 0)); then
+          combined+=("codex-all")
+          combined_added=1
+        fi
+        ;;
+      *) combined+=("$provider") ;;
+      esac
+    done
+    requested=("${combined[@]}")
   fi
 
   check_required_dependencies

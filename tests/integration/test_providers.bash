@@ -132,8 +132,12 @@ assert_contains "$out" "network error"   "fetch_claude 000: network error messag
 _tmp=$(make_tmp_home)
 HOME="$_tmp"
 out=$(fetch_codex 2>&1) || true
+spark_out=$(fetch_codex_spark 2>&1) || true
+combined_out=$(fetch_codex_all 2>&1) || true
 HOME="$_ORIG_HOME"; cleanup_tmp_home
 assert_contains "$out" "not logged in"   "fetch_codex: no credentials → error"
+assert_contains "$spark_out" "not logged in" "fetch_codex_spark: no credentials → error"
+assert_contains "$combined_out" "not logged in" "fetch_codex_all: no credentials → error"
 
 # HTTP 200
 _tmp=$(make_tmp_home)
@@ -147,7 +151,7 @@ assert_contains "$out" "5h"     "fetch_codex 200: shows 5h bar"
 assert_contains "$out" "45%"    "fetch_codex 200: shows 45%"
 assert_contains "$out" "Weekly" "fetch_codex 200: shows weekly bar"
 assert_contains "$out" "20%"    "fetch_codex 200: shows 20%"
-assert_not_contains "$out" " resets" "fetch_codex 200: omits unavailable banked reset data"
+assert_not_contains "$out" "banked:" "fetch_codex 200: omits unavailable banked reset data"
 
 # HTTP 200 with banked reset inventory; applicable count is zero until a limit is reached.
 _tmp=$(make_tmp_home)
@@ -157,9 +161,9 @@ set_http_response "200" '{"rate_limit":{"primary_window":{"used_percent":"45.0"}
 HOME="$_tmp"
 out=$(fetch_codex 2>&1) || true
 HOME="$_ORIG_HOME"; cleanup_tmp_home
-assert_contains "$out" "· 3 resets" "fetch_codex banked resets: shows available inventory"
-assert_not_contains "$out" "· 0 resets" "fetch_codex banked resets: ignores gated applicable count"
-banked_count=$(printf '%s\n' "$out" | awk '/· 3 resets/ { count++ } END { print count + 0 }')
+assert_contains "$out" "banked: 3 resets" "fetch_codex banked resets: shows available inventory separately"
+assert_not_contains "$out" "banked: 0 resets" "fetch_codex banked resets: ignores gated applicable count"
+banked_count=$(printf '%s\n' "$out" | awk '/banked: 3 resets/ { count++ } END { print count + 0 }')
 assert_eq "1" "$banked_count" "fetch_codex banked resets: shows inventory once"
 
 # A single banked reset uses the singular label.
@@ -170,8 +174,8 @@ set_http_response "200" '{"rate_limit":{"primary_window":{"used_percent":"45.0"}
 HOME="$_tmp"
 out=$(fetch_codex 2>&1) || true
 HOME="$_ORIG_HOME"; cleanup_tmp_home
-assert_contains "$out" "· 1 reset" "fetch_codex banked resets: uses singular label"
-assert_not_contains "$out" "· 1 resets" "fetch_codex banked resets: avoids plural for one"
+assert_contains "$out" "banked: 1 reset" "fetch_codex banked resets: uses singular label"
+assert_not_contains "$out" "banked: 1 resets" "fetch_codex banked resets: avoids plural for one"
 
 # An explicit zero remains visible instead of being treated as missing.
 _tmp=$(make_tmp_home)
@@ -181,7 +185,46 @@ set_http_response "200" '{"rate_limit":{"primary_window":{"used_percent":"45.0"}
 HOME="$_tmp"
 out=$(fetch_codex 2>&1) || true
 HOME="$_ORIG_HOME"; cleanup_tmp_home
-assert_contains "$out" "· 0 resets" "fetch_codex banked resets: shows explicit zero inventory"
+assert_contains "$out" "banked: 0 resets" "fetch_codex banked resets: shows explicit zero inventory"
+
+# The detailed reset-credit response supplies every available expiry.
+_tmp=$(make_tmp_home)
+mkdir -p "$_tmp/.codex"
+printf '{"tokens":{"access_token":"fake","account_id":"fake-id"}}' > "$_tmp/.codex/auth.json"
+_codex_now=$(date +%s)
+_codex_first_expiry=$((_codex_now + 90060))
+_codex_later_expiry=$((_codex_now + 180060))
+_codex_spark_reset=$((_codex_now + 3600))
+_codex_usage_body=$(printf '{"rate_limit":{"primary_window":{"used_percent":"45.0"}},"rate_limit_reset_credits":{"available_count":2},"additional_rate_limits":[{"limit_name":"GPT-5.3-Codex-Spark","rate_limit":{"primary_window":{"used_percent":5,"reset_at":%s}}}]}' "$_codex_spark_reset")
+_codex_banked_body=$(printf '{"credits":[{"status":"available","expires_at":%s},{"status":"redeemed","expires_at":%s},{"status":"available","expires_at":%s}]}' \
+  "$_codex_first_expiry" "$((_codex_now + 60))" "$_codex_later_expiry")
+http_json() {
+  case "$1" in
+  */rate-limit-reset-credits)
+    HTTP_STATUS="200"
+    HTTP_BODY="$_codex_banked_body"
+    ;;
+  *)
+    HTTP_STATUS="200"
+    HTTP_BODY="$_codex_usage_body"
+    ;;
+  esac
+}
+HOME="$_tmp"
+out=$(fetch_codex 2>&1) || true
+spark_out=$(fetch_codex_spark 2>&1) || true
+HOME="$_ORIG_HOME"; cleanup_tmp_home
+assert_contains "$out" "banked(1): $(format_epoch_local "$_codex_first_expiry") (1d 1h)" "fetch_codex banked expiry: shows the first available expiry"
+assert_contains "$out" "banked(2): $(format_epoch_local "$_codex_later_expiry") (2d 2h)" "fetch_codex banked expiry: shows the second available expiry"
+assert_not_contains "$out" "$(format_epoch_local "$((_codex_now + 60))")" "fetch_codex banked expiry: omits redeemed credits"
+reset_line=$(printf '%s\n' "$out" | awk '/reset:/ { print; exit }')
+first_banked_line=$(printf '%s\n' "$out" | awk '/banked\(1\):/ { print; exit }')
+assert_contains "$reset_line" "reset:     --" "fetch_codex banked expiry: pads the reset label"
+assert_contains "$first_banked_line" "banked(1): $(format_epoch_local "$_codex_first_expiry")" "fetch_codex banked expiry: aligns reset and banked values"
+assert_not_contains "$out" "$(format_epoch_local "$_codex_spark_reset" "time")" "fetch_codex banked expiry: hides Spark from primary Codex output"
+spark_reset_line=$(printf '%s\n' "$spark_out" | awk -v expected="$(format_epoch_local "$_codex_spark_reset" "time")" '/reset:/ && index($0, expected) { print; exit }')
+assert_contains "$spark_reset_line" "reset: $(format_epoch_local "$_codex_spark_reset" "time")" "fetch_codex banked expiry: keeps a standalone Spark reset compact"
+assert_not_contains "$spark_reset_line" "reset:     " "fetch_codex banked expiry: does not align Spark with the banked group"
 
 # HTTP 200 with the temporary weekly-only response shape
 _tmp=$(make_tmp_home)
@@ -190,14 +233,19 @@ printf '{"tokens":{"access_token":"fake","account_id":"fake-id"}}' > "$_tmp/.cod
 set_http_response "200" '{"rate_limit":{"primary_window":{"used_percent":4,"limit_window_seconds":604800,"reset_at":1784524085},"secondary_window":null},"additional_rate_limits":[{"limit_name":"GPT-5.3-Codex-Spark","metered_feature":"codex_bengalfox","rate_limit":{"primary_window":{"used_percent":0,"limit_window_seconds":604800,"reset_at":1784601644},"secondary_window":null}}]}'
 HOME="$_tmp"
 out=$(fetch_codex 2>&1) || true
+spark_out=$(fetch_codex_spark 2>&1) || true
 HOME="$_ORIG_HOME"; cleanup_tmp_home
 assert_contains "$out" "Weekly"  "fetch_codex weekly-only: labels the primary window from its duration"
 assert_contains "$out" "4%"      "fetch_codex weekly-only: shows weekly usage"
 assert_not_contains "$out" "  5h" "fetch_codex weekly-only: omits the absent 5h window"
 assert_not_contains "$out" "100%" "fetch_codex weekly-only: does not parse reset timestamps as usage"
-assert_contains "$out" "Spark Wk" "fetch_codex weekly-only: labels the Spark weekly window"
-assert_not_contains "$out" "Spark 5h" "fetch_codex weekly-only: omits the absent Spark 5h window"
+assert_not_contains "$out" "0%" "fetch_codex weekly-only: hides Spark usage from primary output"
+assert_contains "$spark_out" "Spark Wk" "fetch_codex_spark weekly-only: labels the Spark weekly window"
+assert_contains "$spark_out" "0%" "fetch_codex_spark weekly-only: preserves zero usage"
+assert_not_contains "$spark_out" "  5h" "fetch_codex_spark weekly-only: omits the absent Spark 5h window"
+assert_not_contains "$spark_out" "4%" "fetch_codex_spark weekly-only: omits primary Codex usage"
 assert_not_contains "$out" "reset: --" "fetch_codex weekly-only: preserves reset timestamps after empty fields"
+assert_not_contains "$spark_out" "reset: --" "fetch_codex_spark weekly-only: preserves reset timestamps"
 
 # Relative reset durations are resolved from one request-time reference epoch.
 _tmp=$(make_tmp_home)
@@ -215,6 +263,7 @@ out=$(
   draw_reset() { printf 'reset_epoch=%s\n' "$1"; }
   HOME="$_tmp"
   fetch_codex 2>&1
+  fetch_codex_spark 2>&1
 ) || true
 cleanup_tmp_home
 assert_contains "$out" "reset_epoch=2100000000" "fetch_codex relative resets: prefers absolute primary reset"
@@ -230,13 +279,20 @@ printf '{"tokens":{"access_token":"fake","account_id":"fake-id"}}' > "$_tmp/.cod
 set_http_response "200" '{"rate_limit":{"primary_window":{"used_percent":"45.0","reset_at":"2026-03-28T12:00:00Z"},"secondary_window":{"used_percent":"20.0","reset_at":"2026-04-04T00:00:00Z"}},"additional_rate_limits":[{"limit_name":"GPT-5.3-Codex-Spark","metered_feature":"codex_spark","rate_limit":{"primary_window":{"used_percent":"15.0","reset_at":"2026-03-28T13:00:00Z"},"secondary_window":{"used_percent":"5.0","reset_at":"2026-04-05T00:00:00Z"}}}],"credits":{"has_credits":true,"balance":"12","unlimited":false}}'
 HOME="$_tmp"
 out=$(fetch_codex 2>&1) || true
+spark_out=$(fetch_codex_spark 2>&1) || true
+combined_out=$(fetch_codex_all 2>&1) || true
 HOME="$_ORIG_HOME"; cleanup_tmp_home
-assert_contains "$out" "Spark 5h" "fetch_codex 200: shows optional Spark 5h bar"
-assert_contains "$out" "15%"      "fetch_codex 200: shows Spark 5h usage"
-assert_contains "$out" "Spark Wk" "fetch_codex 200: shows optional Spark weekly bar"
-assert_contains "$out" "5%"       "fetch_codex 200: shows Spark weekly usage"
+assert_not_contains "$out" "15%" "fetch_codex 200: hides Spark usage"
 assert_contains "$out" "Extra"    "fetch_codex 200: shows optional extra credits"
 assert_contains "$out" "12 credits available" "fetch_codex 200: shows credit balance"
+assert_contains "$spark_out" "Spark 5h" "fetch_codex_spark 200: shows Spark 5h bar"
+assert_contains "$spark_out" "15%" "fetch_codex_spark 200: shows Spark 5h usage"
+assert_contains "$spark_out" "Spark Wk" "fetch_codex_spark 200: shows Spark weekly bar"
+assert_contains "$spark_out" "5%" "fetch_codex_spark 200: shows Spark weekly usage"
+assert_not_contains "$spark_out" "Extra" "fetch_codex_spark 200: omits primary Codex credits"
+assert_contains "$combined_out" "45%" "fetch_codex_all 200: shows primary Codex usage"
+assert_contains "$combined_out" "Spark 5h" "fetch_codex_all 200: shows Spark in the Codex section"
+assert_contains "$combined_out" "12 credits available" "fetch_codex_all 200: shows primary Codex credits"
 
 # HTTP 200 with assigned but exhausted account credits
 _tmp=$(make_tmp_home)
@@ -249,16 +305,26 @@ HOME="$_ORIG_HOME"; cleanup_tmp_home
 assert_contains "$out" "Extra" "fetch_codex 200: shows assigned extra credits with zero balance"
 assert_contains "$out" "0 credits available" "fetch_codex 200: shows exhausted credit balance"
 
-# HTTP 200 with Spark resets identical to primary resets keeps secondary section compact
+# Spark-only output keeps resets even when their timestamps match primary Codex.
 _tmp=$(make_tmp_home)
 mkdir -p "$_tmp/.codex"
 printf '{"tokens":{"access_token":"fake","account_id":"fake-id"}}' > "$_tmp/.codex/auth.json"
 set_http_response "200" '{"rate_limit":{"primary_window":{"used_percent":"45.0","reset_at":"2026-03-28T12:00:00Z"},"secondary_window":{"used_percent":"20.0","reset_at":"2026-04-04T00:00:00Z"}},"additional_rate_limits":[{"limit_name":"GPT-5.3-Codex-Spark","rate_limit":{"primary_window":{"used_percent":"15.0","reset_at":"2026-03-28T12:00:00Z"},"secondary_window":{"used_percent":"5.0","reset_at":"2026-04-04T00:00:00Z"}}}]}'
 HOME="$_tmp"
-out=$(fetch_codex 2>&1) || true
+out=$(fetch_codex_spark 2>&1) || true
 HOME="$_ORIG_HOME"; cleanup_tmp_home
 reset_count=$(printf '%s\n' "$out" | awk '/reset:/ { count++ } END { print count + 0 }')
-assert_eq "2" "$reset_count" "fetch_codex 200: suppresses duplicate Spark reset lines"
+assert_eq "2" "$reset_count" "fetch_codex_spark 200: keeps reset lines independent of hidden primary windows"
+
+# A valid Codex response without Spark limits reports Spark as unavailable.
+_tmp=$(make_tmp_home)
+mkdir -p "$_tmp/.codex"
+printf '{"tokens":{"access_token":"fake","account_id":"fake-id"}}' > "$_tmp/.codex/auth.json"
+set_http_response "200" '{"rate_limit":{"primary_window":{"used_percent":"45.0"}}}'
+HOME="$_tmp"
+out=$(fetch_codex_spark 2>&1) || true
+HOME="$_ORIG_HOME"; cleanup_tmp_home
+assert_contains "$out" "Spark usage data is unavailable" "fetch_codex_spark: reports missing Spark limits"
 
 # HTTP 401
 _tmp=$(make_tmp_home)
