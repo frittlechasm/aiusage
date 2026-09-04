@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Unit tests: draw_bar, draw_unavailable, draw_error, draw_http_error, spinner_frame
+# Unit tests: draw_bar, draw_unavailable, draw_error, draw_http_error
 # Colors are empty in non-TTY test context, making bar content predictable.
 # shellcheck source=../helpers/common.bash
 source "$(dirname "$0")/../helpers/common.bash"
@@ -202,14 +202,3 @@ out=$(
   printf "CLEAN\n"
 )
 assert_contains "$out" "CLEAN" "wait loop: cleanup survives emptied PID list under set -u"
-
-# ── spinner_frame ─────────────────────────────────────────
-# SPINNER_FRAMES=('|' '/' '-' '\')
-
-assert_eq "|" "$(spinner_frame 0)"  "spinner_frame: frame 0 → |"
-assert_eq "/" "$(spinner_frame 1)"  "spinner_frame: frame 1 → /"
-assert_eq "-" "$(spinner_frame 2)"  "spinner_frame: frame 2 → -"
-assert_eq '\' "$(spinner_frame 3)"  "spinner_frame: frame 3 → \\"
-assert_eq "|" "$(spinner_frame 4)"  "spinner_frame: frame 4 wraps → |"
-assert_eq "/" "$(spinner_frame 5)"  "spinner_frame: frame 5 wraps → /"
-assert_eq "|" "$(spinner_frame 8)"  "spinner_frame: frame 8 wraps → |"

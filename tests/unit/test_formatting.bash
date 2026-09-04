@@ -82,6 +82,15 @@ assert_eq "3d"   "$(duration_to_label 'P03D')"               "duration_to_label:
 assert_eq "9"    "$(normalize_epoch '09')"                   "normalize_epoch: leading zero epoch"
 assert_eq "9"    "$(normalize_epoch '09.5')"                 "normalize_epoch: leading zero float"
 
+# Date parsing and formatting use fixed locale/timezone inputs so the expected
+# values are identical on BSD date (macOS) and GNU date (Linux).
+assert_eq "1747994400" "$(TZ=UTC LC_ALL=C normalize_epoch '2025-05-23T15:30:00.123+05:30')" \
+  "normalize_epoch: parses a fractional timestamp with an offset"
+assert_eq "1748014200" "$(TZ=UTC LC_ALL=C normalize_epoch '2025-05-23T15:30:00')" \
+  "normalize_epoch: parses a naive timestamp in local time"
+assert_eq "3:30pm" "$(TZ=UTC LC_ALL=C format_epoch_local '1748014200' time)" \
+  "format_epoch_local: formats compact local time"
+
 out=$(
   set -euo pipefail
   draw_bar "5h" "08" >/dev/null
