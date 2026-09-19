@@ -49,7 +49,12 @@ curl -fsSL https://raw.githubusercontent.com/frittlechasm/aiusage/main/install.s
 ./aiusage codex spark             # primary + Spark under one Codex heading
 ./aiusage opencode-go             # OpenCode Go only
 ./aiusage --version               # print the installed version
+./aiusage update                  # update to the latest GitHub release
 ```
+
+`aiusage update` checks the latest GitHub release, validates the downloaded
+script, and atomically replaces the installed script. The install directory
+must be writable by the current user.
 
 ## How it works
 

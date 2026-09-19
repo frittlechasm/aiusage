@@ -2,7 +2,9 @@
 set -euo pipefail
 
 # ── config ──────────────────────────────────────────────
-VERSION="0.1.5"
+VERSION="0.2.0"
+UPDATE_RELEASE_API_URL="https://api.github.com/repos/frittlechasm/aiusage/releases/latest"
+UPDATE_RAW_BASE_URL="https://raw.githubusercontent.com/frittlechasm/aiusage"
 BAR_WIDTH=20
 LABEL_WIDTH=11
 FILL="█"
@@ -127,6 +129,114 @@ check_required_dependencies() {
   fi
   required_dependency_install_hint >&2
   return 1
+}
+
+version_is_newer() {
+  local candidate="$1" current="$2" i
+  local candidate_parts=() current_parts=()
+
+  [[ "$candidate" =~ ^[0-9]+[.][0-9]+[.][0-9]+$ ]] || return 1
+  [[ "$current" =~ ^[0-9]+[.][0-9]+[.][0-9]+$ ]] || return 1
+
+  IFS=. read -r -a candidate_parts <<<"$candidate"
+  IFS=. read -r -a current_parts <<<"$current"
+
+  for i in 0 1 2; do
+    if ((10#${candidate_parts[$i]} > 10#${current_parts[$i]})); then
+      return 0
+    fi
+    if ((10#${candidate_parts[$i]} < 10#${current_parts[$i]})); then
+      return 1
+    fi
+  done
+
+  return 1
+}
+
+aiusage_script_path() {
+  local path="${BASH_SOURCE[0]}" link dir
+
+  case "$path" in
+  /*) ;;
+  *) path="$PWD/$path" ;;
+  esac
+
+  while [[ -L "$path" ]]; do
+    link=$(readlink "$path") || return 1
+    case "$link" in
+    /*) path="$link" ;;
+    *) path="$(dirname "$path")/$link" ;;
+    esac
+  done
+
+  dir=$(cd -P "$(dirname "$path")" && pwd) || return 1
+  printf '%s/%s' "$dir" "$(basename "$path")"
+}
+
+script_version() {
+  sed -n 's/^VERSION="\([0-9][0-9.]*\)"$/\1/p' "$1" | head -n 1
+}
+
+update_aiusage() {
+  local script_path script_dir metadata tag latest_version download_url tmp downloaded_version
+
+  check_required_dependencies
+
+  script_path=$(aiusage_script_path) || {
+    printf "aiusage update: could not resolve the installed script path\n" >&2
+    return 1
+  }
+  script_dir=$(dirname "$script_path")
+  if [[ ! -w "$script_dir" ]]; then
+    printf "aiusage update: cannot write to %s; reinstall aiusage with a writable install directory\n" "$script_dir" >&2
+    return 1
+  fi
+
+  if ! metadata=$(curl -fsSL "$UPDATE_RELEASE_API_URL"); then
+    printf "aiusage update: could not check the latest release\n" >&2
+    return 1
+  fi
+  tag=$(printf '%s' "$metadata" | jq -r '.tag_name // empty' 2>/dev/null) || true
+  latest_version="${tag#v}"
+  if [[ ! "$latest_version" =~ ^[0-9]+[.][0-9]+[.][0-9]+$ ]]; then
+    printf "aiusage update: latest release has an invalid version: %s\n" "${tag:-unknown}" >&2
+    return 1
+  fi
+
+  if [[ "$latest_version" == "$VERSION" ]]; then
+    printf "aiusage update: already up to date (%s)\n" "$VERSION"
+    return 0
+  fi
+  if ! version_is_newer "$latest_version" "$VERSION"; then
+    printf "aiusage update: installed version %s is newer than latest release %s\n" "$VERSION" "$latest_version"
+    return 0
+  fi
+
+  tmp=$(mktemp "$script_dir/.aiusage.update.XXXXXX") || {
+    printf "aiusage update: could not create a temporary file in %s\n" "$script_dir" >&2
+    return 1
+  }
+  download_url="$UPDATE_RAW_BASE_URL/$tag/aiusage"
+  if ! curl -fsSL "$download_url" -o "$tmp"; then
+    rm -f "$tmp"
+    printf "aiusage update: could not download %s\n" "$tag" >&2
+    return 1
+  fi
+
+  downloaded_version=$(script_version "$tmp")
+  if [[ "$downloaded_version" != "$latest_version" ]] || ! bash -n "$tmp" 2>/dev/null; then
+    rm -f "$tmp"
+    printf "aiusage update: downloaded release failed validation\n" >&2
+    return 1
+  fi
+
+  if ! chmod 755 "$tmp" || ! mv -f "$tmp" "$script_path"; then
+    rm -f "$tmp"
+    printf "aiusage update: could not replace %s\n" "$script_path" >&2
+    return 1
+  fi
+
+  printf "aiusage update: updated %s to %s\n" "$VERSION" "$latest_version"
 }
 
 draw_bar() {
@@ -2273,6 +2383,7 @@ usage() {
   cat <<'EOF'
 Usage: aiusage [provider ...]
        aiusage --version
+       aiusage update
 
 Providers:
   claude       Show Claude usage
@@ -2298,6 +2409,20 @@ run_from_args() {
     run_all_parallel
     return
   fi
+
+  if [[ "$1" == "update" ]]; then
+    if (($# == 1)); then
+      update_aiusage
+      return
+    fi
+    if (($# == 2)) && [[ "$2" == "-h" || "$2" == "--help" || "$2" == "help" ]]; then
+      usage
+      return
+    fi
+    printf "aiusage update: no additional arguments are supported\n" >&2
+    return 1
+  fi
+
   for arg in "$@"; do
     case "$arg" in
     -h | --help | help)
@@ -2307,6 +2432,10 @@ run_from_args() {
     --version)
       printf "aiusage %s\n" "$VERSION"
       return
+      ;;
+    update)
+      printf "aiusage update must be used as a standalone command\n" >&2
+      return 1
       ;;
     all)
       run_all=1
