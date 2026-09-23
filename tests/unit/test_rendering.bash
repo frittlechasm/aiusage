@@ -85,12 +85,16 @@ assert_not_contains "$out" "1 resets"            "draw_banked_resets: avoids plu
 out=$(draw_banked_resets "0" "10")
 assert_contains "$out" "0 resets"               "draw_banked_resets: preserves an explicit zero"
 
+out=$(draw_banked_resets "2" "10" "1893456000")
+assert_contains "$out" "banked: 2 resets"       "draw_banked_resets: keeps count with partial expiry data"
+assert_contains "$out" "banked(1):"             "draw_banked_resets: shows known expiry with partial data"
+
 out=$(draw_banked_resets "invalid" "10")
 assert_eq "" "$out"                              "draw_banked_resets: omits invalid inventory data"
 
-assert_eq "6" "$(codex_detail_label_width 0)"     "codex detail width: uses reset label without expiries"
-assert_eq "10" "$(codex_detail_label_width 2)"   "codex detail width: fits a single-digit banked index"
-assert_eq "11" "$(codex_detail_label_width 12)"  "codex detail width: grows for multiple index digits"
+assert_eq "6" "$(banked_detail_label_width 0)"     "banked detail width: uses reset label without expiries"
+assert_eq "10" "$(banked_detail_label_width 2)"   "banked detail width: fits a single-digit banked index"
+assert_eq "11" "$(banked_detail_label_width 12)"  "banked detail width: grows for multiple index digits"
 
 # ── draw_error ────────────────────────────────────────────
 

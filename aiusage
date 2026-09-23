@@ -733,6 +733,14 @@ draw_banked_resets() {
   [[ "$count" =~ ^[0-9]+$ ]] || return 0
   count=$(strip_leading_zeros "$count")
 
+  if (($# == 0 || $# < count)); then
+    local banked_text="$count resets"
+    if [[ "$count" == "1" ]]; then
+      banked_text="1 reset"
+    fi
+    printf "  %-*s ${DIM}banked: %s${RESET}\n" "$LABEL_WIDTH" "" "$banked_text"
+  fi
+
   if (($# > 0)); then
     local expiry_epoch formatted now rel index=1 label
     now=$(date +%s)
@@ -745,18 +753,10 @@ draw_banked_resets() {
         "$LABEL_WIDTH" "" "$detail_label_width" "$label" "$formatted" "$rel"
       index=$((index + 1))
     done
-    return 0
   fi
-
-  local banked_text="$count resets"
-  if [[ "$count" == "1" ]]; then
-    banked_text="1 reset"
-  fi
-
-  printf "  %-*s ${DIM}banked: %s${RESET}\n" "$LABEL_WIDTH" "" "$banked_text"
 }
 
-codex_detail_label_width() {
+banked_detail_label_width() {
   local banked_count="${1:-0}" label="reset:"
   if [[ "$banked_count" =~ ^[0-9]+$ ]] && ((10#$banked_count > 0)); then
     label="banked($banked_count):"
@@ -999,8 +999,9 @@ fetch_claude() {
   fi
 
   local resp _status
+  # The cedar_ember flag includes saved reset grants in the usage response.
   http_json \
-    "https://api.anthropic.com/api/oauth/usage" "" \
+    "https://api.anthropic.com/api/oauth/usage?cedar_ember=1" "" \
     "Authorization: Bearer $token" \
     "anthropic-beta: oauth-2025-04-20" \
     "Accept: application/json"
@@ -1051,23 +1052,58 @@ fetch_claude() {
   five_hour_reset_epoch=$(normalize_epoch "$five_hour_reset")
   seven_day_reset_epoch=$(normalize_epoch "$seven_day_reset")
 
+  local banked_resets raw_expiry expiry_epoch
+  local banked_expiry_epochs=()
+  # Count saved grants even when they cannot be redeemed against current usage.
+  banked_resets=$(printf '%s' "$resp" | jq -r '
+    .cedar_ember.grants as $grants
+    | if ($grants | type) == "array" and
+         all($grants[]; (.resets_left | type) == "number" and .resets_left >= 0 and .resets_left == (.resets_left | floor))
+      then [$grants[].resets_left] | add // 0
+      else empty end' 2>/dev/null || true)
+
+  if [[ "$banked_resets" =~ ^[0-9]+$ ]] && ((10#$banked_resets > 0)); then
+    while IFS= read -r raw_expiry; do
+      expiry_epoch=$(normalize_epoch "$raw_expiry")
+      [[ "$expiry_epoch" =~ ^[0-9]+$ ]] || continue
+      banked_expiry_epochs+=("$expiry_epoch")
+    done < <(printf '%s' "$resp" | jq -r '
+      [.cedar_ember.grants[]
+       | select(.resets_left > 0 and .ends_at != null)
+       | .ends_at as $expiry
+       | range(.resets_left) | $expiry] | sort | .[]' 2>/dev/null || true)
+  fi
+
+  local detail_label_width=6
+  if ((${#banked_expiry_epochs[@]} > 0)); then
+    detail_label_width=$(banked_detail_label_width "${#banked_expiry_epochs[@]}")
+  fi
+
   if [[ -n "$five_hour" ]]; then
     draw_bar "5h" "${five_hour%.*}"
   else
     draw_unavailable "5h"
   fi
-  draw_reset "$five_hour_reset_epoch" "time"
+  draw_reset "$five_hour_reset_epoch" "time" "$detail_label_width"
 
   if [[ -n "$seven_day" ]]; then
     draw_bar "Weekly" "${seven_day%.*}"
   else
     draw_unavailable "Weekly"
   fi
-  draw_reset "$seven_day_reset_epoch"
+  draw_reset "$seven_day_reset_epoch" "datetime" "$detail_label_width"
 
   if [[ -n "$fable" ]]; then
     draw_bar "Fable" "$fable"
-    draw_reset "$(normalize_epoch "$fable_reset")"
+    draw_reset "$(normalize_epoch "$fable_reset")" "datetime" "$detail_label_width"
+  fi
+
+  if [[ -n "$banked_resets" ]]; then
+    if ((${#banked_expiry_epochs[@]} > 0)); then
+      draw_banked_resets "$banked_resets" "$detail_label_width" "${banked_expiry_epochs[@]}"
+    else
+      draw_banked_resets "$banked_resets" "7"
+    fi
   fi
 
   local extra_enabled extra_util extra_used extra_limit
@@ -1166,7 +1202,7 @@ fetch_codex() {
   local primary_label secondary_label detail_label_width
   primary_label=$(codex_window_label "$primary_seconds" "5h")
   secondary_label=$(codex_window_label "$secondary_seconds" "Weekly")
-  detail_label_width=$(codex_detail_label_width "${#banked_expiry_epochs[@]}")
+  detail_label_width=$(banked_detail_label_width "${#banked_expiry_epochs[@]}")
 
   if [[ "$view" != "spark" ]]; then
     if [[ -n "$primary" ]]; then

@@ -68,7 +68,7 @@ must be writable by the current user.
 
 | Provider | What it shows | Auth source |
 |----------|--------------|-------------|
-| Claude | `5h`, `Weekly`, and optional `Fable` usage bars, extra credit usage | `claude` login credentials |
+| Claude | `5h`, `Weekly`, and optional `Fable` usage bars, banked reset count and expiries when offered, extra credit usage | `claude` login credentials |
 | Codex | Available usage windows (for example `5h` or `Weekly`), banked reset expiries, and extra credits | `~/.codex/auth.json` |
 | Codex Spark | Spark usage windows shown under the Codex heading, selected with `codex-spark` or `spark` | `~/.codex/auth.json` |
 | Cursor | Monthly credit or request usage | Browser cookies or `CURSOR_COOKIE` |
@@ -77,6 +77,7 @@ must be writable by the current user.
 | Copilot | AI Credits usage, with legacy `Premium`, `Chat`, and `Completions` quotas when applicable | `COPILOT_GITHUB_TOKEN` or `copilot login` |
 | OpenCode Go | `5h`, `Weekly`, and `Monthly` usage | `opencode` login credentials, `OPENCODE_GO_API_KEY`, or `OPENCODE_API_KEY` |
 
+- Claude limit resets can be redeemed in **Settings → Usage** on Claude web or Desktop; the CLI shows the remaining count and available expiry dates.
 - Cursor session lookup is automatic from Firefox, Chrome, Arc, Brave, Edge, or Helium.
 - Copilot uses AI Credits for current plans and retains premium-request tracking for legacy annual plans.
 - Copilot plans with unlimited or org-managed quotas may show only the plan name instead of bars.

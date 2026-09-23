@@ -30,6 +30,48 @@ assert_contains "$out" "50%"    "fetch_claude 200: shows 50% utilization"
 assert_contains "$out" "Weekly" "fetch_claude 200: shows weekly bar"
 assert_contains "$out" "30%"    "fetch_claude 200: shows 30% utilization"
 assert_not_contains "$out" "Fable" "fetch_claude 200: omits unavailable Fable limit"
+assert_not_contains "$out" "banked:" "fetch_claude 200: omits unavailable banked reset data"
+
+# Claude's usage response carries reset grants separately from usage windows.
+_tmp=$(mktemp -d)
+mkdir -p "$_tmp/.claude"
+printf '{"claudeAiOauth":{"accessToken":"fake-token"}}' > "$_tmp/.claude/.credentials.json"
+set_http_response "200" '{"five_hour":{"utilization":25},"seven_day":{"utilization":50},"cedar_ember":{"eligible":true,"grants":[{"resets_left":2,"ends_at":"2030-10-22T00:00:00Z"},{"resets_left":1,"ends_at":"2030-11-22T00:00:00Z"},{"resets_left":0,"ends_at":"2030-09-22T00:00:00Z"}]},"extra_usage":{"is_enabled":true,"utilization":25,"used_credits":500,"monthly_limit":2000}}'
+http_json() {
+  if [[ "$1" == "https://api.anthropic.com/api/oauth/usage?cedar_ember=1" ]]; then
+    HTTP_STATUS="$_MOCK_HTTP_STATUS"
+    HTTP_BODY="$_MOCK_HTTP_BODY"
+  else
+    HTTP_STATUS="404"
+    HTTP_BODY=""
+  fi
+}
+HOME="$_tmp"
+out=$(macos_keychain_read() { return 1; }; fetch_claude 2>&1) || true
+assert_contains "$out" "banked(1): $(format_epoch_local "$(normalize_epoch '2030-10-22T00:00:00Z')")" "fetch_claude banked resets: shows first expiry"
+assert_contains "$out" "banked(2): $(format_epoch_local "$(normalize_epoch '2030-10-22T00:00:00Z')")" "fetch_claude banked resets: repeats expiry for each available reset"
+assert_contains "$out" "banked(3): $(format_epoch_local "$(normalize_epoch '2030-11-22T00:00:00Z')")" "fetch_claude banked resets: shows later expiry"
+assert_not_contains "$out" "2030-09-22" "fetch_claude banked resets: omits spent grant"
+assert_contains "$out" "Extra" "fetch_claude banked resets: keeps extra usage bar"
+assert_contains "$out" '$5.00 / $20.00' "fetch_claude banked resets: keeps extra usage credits"
+
+set_http_response "200" '{"cedar_ember":{"grants":[]}}'
+out=$(macos_keychain_read() { return 1; }; fetch_claude 2>&1) || true
+assert_contains "$out" "banked: 0 resets" "fetch_claude banked resets: shows explicit zero inventory"
+
+set_http_response "200" '{"cedar_ember":{"grants":[{"resets_left":1,"ends_at":null}]}}'
+out=$(macos_keychain_read() { return 1; }; fetch_claude 2>&1) || true
+assert_contains "$out" "banked: 1 reset" "fetch_claude banked resets: keeps count when expiry is unavailable"
+
+set_http_response "200" '{"cedar_ember":{"grants":[{"resets_left":1,"ends_at":"2030-10-22T00:00:00Z"},{"resets_left":1,"ends_at":null}]}}'
+out=$(macos_keychain_read() { return 1; }; fetch_claude 2>&1) || true
+assert_contains "$out" "banked: 2 resets" "fetch_claude banked resets: keeps total with partial expiry data"
+assert_contains "$out" "banked(1): $(format_epoch_local "$(normalize_epoch '2030-10-22T00:00:00Z')")" "fetch_claude banked resets: shows known expiry with partial data"
+
+set_http_response "200" '{"cedar_ember":{"grants":[{"resets_left":"bad","ends_at":"2030-10-22T00:00:00Z"}]}}'
+out=$(macos_keychain_read() { return 1; }; fetch_claude 2>&1) || true
+HOME="$_ORIG_HOME"; rm -rf "$_tmp"
+assert_not_contains "$out" "banked:" "fetch_claude banked resets: rejects malformed inventory"
 
 # HTTP 200: current limits array without a Fable allowance
 _tmp=$(mktemp -d)
