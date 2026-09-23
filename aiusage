@@ -984,13 +984,13 @@ fetch_claude() {
   local creds_file="$HOME/.claude/.credentials.json"
   local token=""
 
-  if [[ -f "$creds_file" ]]; then
-    token=$(jq -r '.claudeAiOauth.accessToken // empty' "$creds_file" 2>/dev/null)
+  if [[ "$OSTYPE" == darwin* ]]; then
+    # Claude login updates Keychain on macOS; a credentials file may be stale.
+    token=$(macos_keychain_read "Claude Code-credentials" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null || true)
   fi
 
-  if [[ -z "$token" ]]; then
-    # try macOS keychain
-    token=$(macos_keychain_read "Claude Code-credentials" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null || true)
+  if [[ -z "$token" && -f "$creds_file" ]]; then
+    token=$(jq -r '.claudeAiOauth.accessToken // empty' "$creds_file" 2>/dev/null || true)
   fi
 
   if [[ -z "$token" ]]; then

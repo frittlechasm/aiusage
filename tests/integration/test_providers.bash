@@ -23,7 +23,7 @@ mkdir -p "$_tmp/.claude"
 printf '{"claudeAiOauth":{"accessToken":"fake-token"}}' > "$_tmp/.claude/.credentials.json"
 set_http_response "200" '{"five_hour":{"utilization":"50.0","reset_at":"2026-03-28T12:00:00Z"},"seven_day":{"utilization":"30.0","reset_at":"2026-04-04T00:00:00Z"}}'
 HOME="$_tmp"
-out=$(fetch_claude 2>&1) || true
+out=$(macos_keychain_read() { return 1; }; fetch_claude 2>&1) || true
 HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 assert_contains "$out" "5h"     "fetch_claude 200: shows 5h bar"
 assert_contains "$out" "50%"    "fetch_claude 200: shows 50% utilization"
@@ -37,7 +37,7 @@ mkdir -p "$_tmp/.claude"
 printf '{"claudeAiOauth":{"accessToken":"fake-token"}}' > "$_tmp/.claude/.credentials.json"
 set_http_response "200" '{"five_hour":{"utilization":"50.0"},"seven_day":{"utilization":"30.0"},"limits":[{"kind":"session","group":"session","percent":95,"scope":null},{"kind":"weekly_all","group":"weekly","percent":90,"scope":null}]}'
 HOME="$_tmp"
-out=$(fetch_claude 2>&1) || true
+out=$(macos_keychain_read() { return 1; }; fetch_claude 2>&1) || true
 HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 assert_not_contains "$out" "Fable" "fetch_claude 200: ignores unscoped current limits"
 five_hour_line=$(printf '%s\n' "$out" | awk '$1 == "5h"')
@@ -51,7 +51,7 @@ mkdir -p "$_tmp/.claude"
 printf '{"claudeAiOauth":{"accessToken":"fake-token"}}' > "$_tmp/.claude/.credentials.json"
 set_http_response "200" '{"limits":[{"kind":"session","utilization":42,"resetsAt":"2026-07-25T12:00:00Z"},{"kind":"weekly_all","percent":31,"resets_at":"2026-07-30T00:00:00Z"},{"kind":"weekly_scoped","utilization":17,"resetsAt":"2026-07-30T00:00:00Z","scope":{"model":{"displayName":"Claude 3.5 Fable"}}}]}'
 HOME="$_tmp"
-out=$(fetch_claude 2>&1) || true
+out=$(macos_keychain_read() { return 1; }; fetch_claude 2>&1) || true
 HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 five_hour_line=$(printf '%s\n' "$out" | awk '$1 == "5h"')
 weekly_line=$(printf '%s\n' "$out" | awk '$1 == "Weekly"')
@@ -67,7 +67,7 @@ mkdir -p "$_tmp/.claude"
 printf '{"claudeAiOauth":{"accessToken":"fake-token"}}' > "$_tmp/.claude/.credentials.json"
 set_http_response "200" '{"fiveHour":{"utilization":22,"resetsAt":"2026-07-25T12:00:00Z"},"sevenDay":{"utilization":44,"resetsAt":"2026-07-30T00:00:00Z"}}'
 HOME="$_tmp"
-out=$(fetch_claude 2>&1) || true
+out=$(macos_keychain_read() { return 1; }; fetch_claude 2>&1) || true
 HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 five_hour_line=$(printf '%s\n' "$out" | awk '$1 == "5h"')
 weekly_line=$(printf '%s\n' "$out" | awk '$1 == "Weekly"')
@@ -81,7 +81,7 @@ mkdir -p "$_tmp/.claude"
 printf '{"claudeAiOauth":{"accessToken":"fake-token"}}' > "$_tmp/.claude/.credentials.json"
 set_http_response "200" '{"five_hour":"invalid","seven_day":[],"limits":[{"kind":"session","percent":18},{"kind":"weekly_all","percent":27}]}'
 HOME="$_tmp"
-out=$(fetch_claude 2>&1) || true
+out=$(macos_keychain_read() { return 1; }; fetch_claude 2>&1) || true
 HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 assert_contains "$out" "18%" "fetch_claude malformed flat windows: preserves structured session"
 assert_contains "$out" "27%" "fetch_claude malformed flat windows: preserves structured weekly"
@@ -92,7 +92,7 @@ mkdir -p "$_tmp/.claude"
 printf '{"claudeAiOauth":{"accessToken":"fake-token"}}' > "$_tmp/.claude/.credentials.json"
 set_http_response "200" '{"five_hour":{"utilization":"50.0","resets_at":"2026-07-25T12:00:00Z"},"seven_day":{"utilization":"30.0","resets_at":"2026-07-30T00:00:00Z"},"limits":[{"kind":"session","group":"session","percent":50,"resets_at":"2026-07-25T12:00:00Z","scope":"unexpected"},{"kind":"weekly_all","group":"weekly","percent":30,"resets_at":"2026-07-30T00:00:00Z","scope":null},{"kind":"weekly_scoped","group":"weekly","percent":17,"resets_at":"2026-07-30T00:00:00Z","scope":{"model":{"id":null,"display_name":"Fable"},"surface":null}}]}'
 HOME="$_tmp"
-out=$(fetch_claude 2>&1) || true
+out=$(macos_keychain_read() { return 1; }; fetch_claude 2>&1) || true
 assert_contains "$out" "Fable" "fetch_claude 200: shows optional Fable bar"
 assert_contains "$out" "17%"   "fetch_claude 200: shows Fable usage"
 reset_count=$(printf '%s\n' "$out" | awk '/reset:/ { count++ } END { print count + 0 }')
@@ -101,7 +101,7 @@ assert_not_contains "$out" "reset: --" "fetch_claude 200: parses the Fable reset
 
 # A present Fable allowance remains visible when none of it has been used
 set_http_response "200" '{"five_hour":{"utilization":"50.0"},"seven_day":{"utilization":"30.0"},"limits":[{"kind":"weekly_scoped","group":"weekly","percent":0,"resets_at":"2026-07-30T00:00:00Z","scope":{"model":{"display_name":"Claude Fable 5"}}}]}'
-out=$(fetch_claude 2>&1) || true
+out=$(macos_keychain_read() { return 1; }; fetch_claude 2>&1) || true
 HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 fable_line=$(printf '%s\n' "$out" | awk '$1 == "Fable"')
 assert_contains "$fable_line" "0%" "fetch_claude 200: shows zero Fable usage"
@@ -112,7 +112,7 @@ mkdir -p "$_tmp/.claude"
 printf '{"claudeAiOauth":{"accessToken":"fake-token"}}' > "$_tmp/.claude/.credentials.json"
 set_http_response "401" ""
 HOME="$_tmp"
-out=$(fetch_claude 2>&1) || true
+out=$(macos_keychain_read() { return 1; }; fetch_claude 2>&1) || true
 HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 assert_contains "$out" "session expired" "fetch_claude 401: session expired message"
 
@@ -122,7 +122,7 @@ mkdir -p "$_tmp/.claude"
 printf '{"claudeAiOauth":{"accessToken":"fake-token"}}' > "$_tmp/.claude/.credentials.json"
 set_http_response "000" ""
 HOME="$_tmp"
-out=$(fetch_claude 2>&1) || true
+out=$(macos_keychain_read() { return 1; }; fetch_claude 2>&1) || true
 HOME="$_ORIG_HOME"; rm -rf "$_tmp"
 assert_contains "$out" "network error"   "fetch_claude 000: network error message"
 

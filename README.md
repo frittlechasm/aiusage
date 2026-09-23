@@ -60,6 +60,7 @@ must be writable by the current user.
 
 - Single self-contained bash script — no build step, no daemon, no framework.
 - Reads local auth or quota state already present on your machine, then calls provider usage endpoints.
+- On macOS, Claude credentials are read from Keychain first, falling back to `~/.claude/.credentials.json` when no token can be read. Linux uses the credentials file.
 - Local sources include `~/.codex/auth.json`, `~/.gemini/oauth_creds.json`, `~/.local/share/opencode/auth.json`, Claude credentials, browser cookies for Cursor, and JetBrains quota files.
 - If auth is missing, expired, or the upstream endpoint changed, that provider is shown as unavailable or returns an error line.
 
