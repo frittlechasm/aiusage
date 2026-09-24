@@ -18,8 +18,6 @@ test_path="$deps_bin:/usr/bin:/bin"
 
 assert_exit_0 "provider_is_known: claude"    provider_is_known "claude"
 assert_exit_0 "provider_is_known: codex"     provider_is_known "codex"
-assert_exit_0 "provider_is_known: codex-spark" provider_is_known "codex-spark"
-assert_exit_1 "provider_is_known: internal codex-all" provider_is_known "codex-all"
 assert_exit_0 "provider_is_known: cursor"    provider_is_known "cursor"
 assert_exit_0 "provider_is_known: gemini"    provider_is_known "gemini"
 assert_exit_0 "provider_is_known: jetbrains" provider_is_known "jetbrains"
@@ -30,18 +28,10 @@ assert_exit_1 "provider_is_known: foobar"    provider_is_known "foobar"
 assert_exit_1 "provider_is_known: empty"     provider_is_known ""
 assert_exit_1 "provider_is_known: CLAUDE uppercase" provider_is_known "CLAUDE"
 
-# ── provider_canonical_slug ───────────────────────────────
-
-assert_eq "codex-spark" "$(provider_canonical_slug 'spark')" "canonical slug: spark aliases codex-spark"
-assert_eq "codex-spark" "$(provider_canonical_slug 'codex-spark')" "canonical slug: codex-spark passes through"
-assert_eq "claude" "$(provider_canonical_slug 'claude')" "canonical slug: other providers pass through"
-
 # ── provider_label ────────────────────────────────────────
 
 assert_eq "Claude"    "$(provider_label 'claude')"    "provider_label: claude"
 assert_eq "Codex"     "$(provider_label 'codex')"     "provider_label: codex"
-assert_eq "Codex"     "$(provider_label 'codex-spark')" "provider_label: codex-spark shares the Codex heading"
-assert_eq "Codex"     "$(provider_label 'codex-all')" "provider_label: combined Codex view shares one heading"
 assert_eq "Cursor"    "$(provider_label 'cursor')"    "provider_label: cursor"
 assert_eq "Gemini"    "$(provider_label 'gemini')"    "provider_label: gemini"
 assert_eq "JetBrains" "$(provider_label 'jetbrains')" "provider_label: jetbrains"
@@ -54,7 +44,6 @@ assert_exit_0 "list_contains: item in middle"  provider_list_contains "foo" "bar
 assert_exit_0 "list_contains: single match"    provider_list_contains "x" "x"
 assert_exit_1 "list_contains: item absent"     provider_list_contains "foo" "bar" "baz"
 assert_exit_1 "list_contains: empty list"      provider_list_contains "foo"
-assert_exit_1 "default providers: codex-spark remains opt-in" provider_list_contains "codex-spark" "${ALL_PROVIDERS[@]}"
 
 # ── provider_unavailable_message ──────────────────────────
 
@@ -70,8 +59,6 @@ assert_contains "$out" "COPILOT_GITHUB_TOKEN" "unavailable_message: copilot ment
 out=$(provider_unavailable_message "opencode-go")
 assert_contains "$out" "OPENCODE_GO_API_KEY" "unavailable_message: opencode-go mentions env var"
 
-out=$(provider_unavailable_message "codex-spark")
-assert_contains "$out" "codex" "unavailable_message: codex-spark mentions Codex"
 
 # ── CLI: help flags (subprocess) ──────────────────────────
 
@@ -79,8 +66,6 @@ out=$(env PATH="$test_path" bash "$AIUSAGE_SCRIPT" --help 2>&1); code=$?
 assert_eq "0" "$code"           "--help: exits 0"
 assert_contains "$out" "Usage:" "--help: shows usage header"
 assert_contains "$out" "claude" "--help: lists providers"
-assert_contains "$out" "codex-spark" "--help: lists the canonical Spark slug"
-assert_contains "$out" "alias: spark" "--help: documents the Spark alias"
 assert_contains "$out" "aiusage update" "--help: documents self-update command"
 
 out=$(env PATH="$test_path" bash "$AIUSAGE_SCRIPT" -h 2>&1); code=$?
@@ -135,7 +120,7 @@ assert_eq "1" "$(tail -c 1 "$out_file" | wc -l | tr -d ' ')" "--help: output end
 run_named_providers() { return 0; }
 run_all_parallel() { return 0; }
 
-for p in claude codex codex-spark spark cursor gemini jetbrains copilot opencode-go; do
+for p in claude codex cursor gemini jetbrains copilot opencode-go; do
   old_path="$PATH"
   PATH="$test_path"
   run_from_args "$p" >/dev/null 2>&1; code=$?
@@ -143,18 +128,16 @@ for p in claude codex codex-spark spark cursor gemini jetbrains copilot opencode
   assert_eq "0" "$code" "known provider '$p': exits 0"
 done
 
+# Retired selectors fail through the strict CLI entry point.
+for p in spark codex-spark codex-all; do
+  out=$(env PATH="$test_path" bash "$AIUSAGE_SCRIPT" "$p" 2>&1); code=$?
+  assert_eq "1" "$code" "retired provider '$p': exits 1"
+  assert_contains "$out" "Unknown provider: $p" "retired provider '$p': names the rejected selector"
+done
+
+out=$(env PATH="$test_path" bash "$AIUSAGE_SCRIPT" --help 2>&1)
+assert_not_contains "$out" "spark" "--help: omits retired Spark selectors"
+
 run_named_providers() { printf '%s' "$*"; }
-out=$(run_from_args spark)
-assert_eq "codex-spark" "$out" "spark alias: normalizes before provider selection"
-
-out=$(run_from_args codex-spark spark)
-assert_eq "codex-spark" "$out" "spark alias: deduplicates with the canonical slug"
-
-out=$(run_from_args codex spark)
-assert_eq "codex-all" "$out" "Codex selection: combines primary and Spark"
-
-out=$(run_from_args spark codex)
-assert_eq "codex-all" "$out" "Codex selection: combines Spark and primary in either order"
-
-out=$(run_from_args claude codex spark)
-assert_eq "claude codex-all" "$out" "Codex selection: preserves the combined section position"
+out=$(run_from_args claude codex codex)
+assert_eq "claude codex" "$out" "Codex selection: preserves order and deduplicates"
