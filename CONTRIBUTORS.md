@@ -24,7 +24,7 @@ Please keep pull requests focused on a single change. For larger changes, open a
 
 ### Guidelines
 
-- The script must remain a single self-contained bash file with no external dependencies beyond `bash`, `curl`, and `jq`
+- Follow the [runtime and provider constraints](AGENTS.md) and the [README test instructions](README.md#testing); optional provider dependencies are listed in [Install](README.md#install).
 - Test against both macOS and Linux before submitting
 - Follow the existing code style and keep the output format consistent
 

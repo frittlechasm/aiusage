@@ -2,8 +2,7 @@
 
 # aiusage
 
-[![License](https://img.shields.io/badge/license-MIT-111111?style=flat-square)](./LICENSE)
-[![GitHub](https://img.shields.io/badge/github-frittlechasm%2Faiusage-111111?style=flat-square&logo=github)](https://github.com/frittlechasm/aiusage)
+[![License](https://img.shields.io/badge/license-MIT-111111?style=flat-square)](./LICENSE) [![GitHub](https://img.shields.io/badge/github-frittlechasm%2Faiusage-111111?style=flat-square&logo=github)](https://github.com/frittlechasm/aiusage)
 
 <img src="./img.png" alt="aiusage CLI output" width="1000" />
 
@@ -25,14 +24,12 @@ Windows PowerShell:
 irm https://raw.githubusercontent.com/frittlechasm/aiusage/main/install.ps1 | iex
 ```
 
-Requires `bash`, `curl`, `jq`.
+- Requires `bash`, `curl`, `jq`.
+- Cursor's optional automatic browser-cookie lookup also requires `sqlite3`.
+- Chromium-based browsers additionally require `python3` and `openssl`.
+- Set `CURSOR_COOKIE` to skip browser lookup and these optional dependencies.
 
-Cursor's optional automatic browser-cookie lookup also requires `sqlite3`.
-Chromium-based browsers additionally require `python3` and `openssl`. Set
-`CURSOR_COOKIE` to skip browser lookup and these optional dependencies.
-
-By default this installs to `~/.local/bin` on macOS/Linux/WSL and
-`%LOCALAPPDATA%\Programs\aiusage\bin` on Windows. To choose a directory:
+By default this installs to `~/.local/bin` on macOS/Linux/WSL and `%LOCALAPPDATA%\Programs\aiusage\bin` on Windows. To choose a directory:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/frittlechasm/aiusage/main/install.sh | sh -s -- --dir "$HOME/bin"
@@ -50,9 +47,7 @@ curl -fsSL https://raw.githubusercontent.com/frittlechasm/aiusage/main/install.s
 ./aiusage update                  # update to the latest GitHub release
 ```
 
-`aiusage update` checks the latest GitHub release, validates the downloaded
-script, and atomically replaces the installed script. The install directory
-must be writable by the current user.
+`aiusage update` checks the latest GitHub release, validates the downloaded script, and atomically replaces the installed script. The install directory must be writable by the current user.
 
 ## How it works
 
@@ -82,8 +77,10 @@ must be writable by the current user.
 
 ## Adding providers
 
-1. Add a `fetch_<provider>()` function.
-2. Register it in `run_all_parallel()` and the main argument parser.
+1. Verify the local auth source and a stable usage endpoint, then add `fetch_<provider>()` with logged-out, expired-session, and network-error handling.
+2. Add its identifier to `ALL_PROVIDERS` and update `provider_label()`, `provider_fetch_fn()`, `provider_is_known()`, `provider_available()`, and `provider_unavailable_message()`.
+3. Dispatch and argument validation use this registry.
+4. Add mocks in `tests/helpers/mock_setup.bash` and provider cases in `tests/integration/test_providers.bash`, then update the provider notes above.
 
 ## Testing
 
