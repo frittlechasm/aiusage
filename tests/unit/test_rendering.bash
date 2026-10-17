@@ -206,3 +206,20 @@ out=$(
   printf "CLEAN\n"
 )
 assert_contains "$out" "CLEAN" "wait loop: cleanup survives emptied PID list under set -u"
+
+# Redirected output must carry no ANSI escapes, including terminal-only
+# control codes such as an erase-line prefix on rendered lines.
+out=$(
+  set -e
+  tmp_a=$(mktemp)
+  tmp_b=$(mktemp)
+  printf '  5h line\n' >"$tmp_a"
+  ( exit 3 ) & pid=$!
+  WAIT_LABELS=("First" "Second")
+  WAIT_TMPS=("$tmp_a" "$tmp_b")
+  WAIT_PIDS=("$pid")
+  wait_and_render_fetches
+  rm -f "$tmp_a" "$tmp_b"
+)
+assert_contains "$out" "Second" "redirected render: renders every section"
+assert_not_contains "$out" $'\033' "redirected render: no ANSI escapes"

@@ -766,11 +766,11 @@ show_cursor() {
 }
 
 render_line() {
-  printf "\033[2K%s\n" "$1"
+  printf "%s\n" "$1"
 }
 
 render_heading_line() {
-  printf "\033[2K%b%s%b\n" "$BOLD" "$1" "$RESET"
+  printf "%b%s%b\n" "$BOLD" "$1" "$RESET"
 }
 
 render_compact_status_line() {
