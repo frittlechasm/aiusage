@@ -120,7 +120,7 @@ assert_eq "1" "$(tail -c 1 "$out_file" | wc -l | tr -d ' ')" "--help: output end
 run_named_providers() { return 0; }
 run_all_parallel() { return 0; }
 
-for p in claude codex cursor gemini jetbrains copilot opencode-go; do
+for p in claude codex cursor gemini jetbrains copilot opencode-go grok; do
   old_path="$PATH"
   PATH="$test_path"
   run_from_args "$p" >/dev/null 2>&1; code=$?

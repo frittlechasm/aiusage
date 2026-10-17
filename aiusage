@@ -414,7 +414,7 @@ draw_http_error() {
   esac
 }
 
-ALL_PROVIDERS=(claude codex cursor gemini jetbrains copilot opencode-go)
+ALL_PROVIDERS=(claude codex cursor gemini jetbrains copilot opencode-go grok)
 
 provider_label() {
   case "$1" in
@@ -425,6 +425,7 @@ provider_label() {
   jetbrains) printf "JetBrains" ;;
   copilot) printf "Copilot" ;;
   opencode-go) printf "OpenCode Go" ;;
+  grok) printf "Grok" ;;
   *) return 1 ;;
   esac
 }
@@ -438,13 +439,14 @@ provider_fetch_fn() {
   jetbrains) printf "fetch_jetbrains" ;;
   copilot) printf "fetch_copilot" ;;
   opencode-go) printf "fetch_opencode_go" ;;
+  grok) printf "fetch_grok" ;;
   *) return 1 ;;
   esac
 }
 
 provider_is_known() {
   case "$1" in
-  claude | codex | cursor | gemini | jetbrains | copilot | opencode-go) return 0 ;;
+  claude | codex | cursor | gemini | jetbrains | copilot | opencode-go | grok) return 0 ;;
   *) return 1 ;;
   esac
 }
@@ -469,6 +471,7 @@ provider_unavailable_message() {
   jetbrains) printf "jetbrains usage data is unavailable" ;;
   copilot) printf "copilot not available — set COPILOT_GITHUB_TOKEN or run: copilot login" ;;
   opencode-go) printf "OpenCode Go not available — set OPENCODE_GO_API_KEY or OPENCODE_API_KEY, or run: opencode auth login" ;;
+  grok) printf "grok is not logged in run: grok login" ;;
   *) return 1 ;;
   esac
 }
@@ -482,6 +485,8 @@ provider_available() {
   jetbrains) [[ -n "$(find_jetbrains_quota_file)" ]] ;;
   copilot) _copilot_auth_source_available ;;
   opencode-go) _opencode_go_auth_source_available ;;
+  # Check the official CLI's auth file: a community grok-cli also installs `grok`.
+  grok) [[ -f "$(_grok_auth_file)" ]] ;;
   *) return 1 ;;
   esac
 }
@@ -2328,6 +2333,75 @@ fetch_opencode_go() {
   ((rendered == 1)) || draw_error "OpenCode Go usage data is unavailable"
 }
 
+# ── grok ────────────────────────────────────────────────
+_grok_auth_file() {
+  printf '%s' "${GROK_HOME:-$HOME/.grok}/auth.json"
+}
+
+# The official xAI Grok CLI refreshes this session only while it runs, so an
+# idle session expires and needs another `grok` run. The billing endpoint
+# rejects xAI API keys; it needs this grok.com session.
+fetch_grok() {
+  local auth_file token="" expires_at="" _creds
+  auth_file=$(_grok_auth_file)
+
+  if [[ -f "$auth_file" ]]; then
+    # Entries are keyed "<issuer>::<client id>"; the CLI's client id is fixed.
+    _creds=$(jq -r '
+      first(to_entries[] | select(.key | startswith("https://auth.x.ai::")) | .value) |
+      [.key // "", .expires_at // ""] | join("\u001f")
+    ' "$auth_file" 2>/dev/null) || true
+    IFS=$'\x1f' read -r token expires_at <<<"$_creds"
+  fi
+
+  if [[ -z "$token" ]]; then
+    draw_error "not logged in run: grok login"
+    return
+  fi
+
+  local expires_epoch now
+  expires_epoch=$(normalize_epoch "$expires_at")
+  now=$(date +%s)
+  if [[ -n "$expires_epoch" ]] && ((expires_epoch <= now + 60)); then
+    draw_error "session expired run: grok"
+    return
+  fi
+
+  local resp _status
+  http_json "https://cli-chat-proxy.grok.com/v1/billing?format=credits" "" \
+    "Authorization: Bearer $token" \
+    "Accept: application/json"
+  resp="$HTTP_BODY"
+  _status="$HTTP_STATUS"
+
+  if [[ "$_status" != 2* ]]; then
+    draw_http_error "$_status" "session expired run: grok"
+    return
+  fi
+
+  local usage_values percent period_type period_end
+  usage_values=$(printf '%s' "$resp" | jq -jr '
+    .config | [.creditUsagePercent, .currentPeriod.type, .currentPeriod.end] |
+    map(if . == null then "" else tostring end) |
+    join("\u001f")
+  ' 2>/dev/null) || true
+  IFS=$'\x1f' read -r percent period_type period_end <<<"$usage_values"
+
+  if [[ ! "$percent" =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then
+    draw_error "Grok usage data is unavailable"
+    return
+  fi
+
+  local label="Usage" reset_epoch
+  [[ "$period_type" == "USAGE_PERIOD_TYPE_WEEKLY" ]] && label="Weekly"
+  draw_bar "$label" "$percent"
+
+  reset_epoch=$(normalize_epoch "$period_end")
+  if [[ -n "$reset_epoch" ]]; then
+    draw_reset "$reset_epoch"
+  fi
+}
+
 # ── main ───────────────────────────────────────────────
 
 usage() {
@@ -2344,6 +2418,7 @@ Providers:
   jetbrains    Show JetBrains AI usage
   copilot      Show GitHub Copilot usage (uses copilot login or COPILOT_GITHUB_TOKEN)
   opencode-go  Show OpenCode Go usage (uses opencode login or an OpenCode API key)
+  grok         Show Grok CLI usage (uses grok login)
 
 Pass one or more providers to print only those sections.
 Omit provider, or pass 'all', to print all detected providers.

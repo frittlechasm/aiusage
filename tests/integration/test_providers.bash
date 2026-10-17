@@ -789,3 +789,62 @@ assert_not_contains "$out" "HTTP 200" "fetch_opencode_go empty 200: no contradic
 set_http_response "200" '{"unexpected":true}'
 out=$(OPENCODE_GO_API_KEY="fake-key" OPENCODE_API_KEY= fetch_opencode_go 2>&1) || true
 assert_contains "$out" "usage data is unavailable" "fetch_opencode_go malformed 200: response-shape error"
+
+# ── fetch_grok ──────────────────────────────────────────────
+
+_grok_write_auth() {
+  printf '{"https://auth.x.ai::test-client":{"key":"grok-session","expires_at":"%s"}}' "$2" >"$1/auth.json"
+}
+
+# No auth file.
+_tmp=$(mktemp -d)
+out=$(GROK_HOME="$_tmp" fetch_grok 2>&1) || true
+assert_contains "$out" "not logged in run: grok login" "fetch_grok: no auth file → error"
+
+# An expired session is reported locally without a request.
+_grok_write_auth "$_tmp" "2020-01-01T00:00:00.000000Z"
+_capture=$(mktemp)
+http_json() { printf 'called\n' >"$_capture"; HTTP_STATUS="200"; HTTP_BODY=""; }
+out=$(GROK_HOME="$_tmp" fetch_grok 2>&1) || true
+assert_contains "$out" "session expired run: grok" "fetch_grok: expired session → error"
+assert_eq "" "$(<"$_capture")" "fetch_grok: expired session makes no request"
+
+# Verified live response shape: one weekly credit window.
+_grok_write_auth "$_tmp" "2099-01-01T00:00:00.000000Z"
+_grok_body='{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2030-01-01T16:40:17.211+00:00","end":"2030-01-08T16:40:17.211+00:00"},"creditUsagePercent":54.0,"productUsage":[{"product":"GrokBot","usagePercent":54.0}],"prepaidBalance":{"val":0}}}'
+http_json() {
+  printf '%s\n' "$@" >"$_capture"
+  HTTP_STATUS="200"
+  HTTP_BODY="$_grok_body"
+}
+out=$(
+  draw_reset() { printf 'reset_epoch=%s\n' "$1"; }
+  GROK_HOME="$_tmp" fetch_grok 2>&1
+) || true
+request=$(<"$_capture")
+assert_contains "$request" "https://cli-chat-proxy.grok.com/v1/billing?format=credits" "fetch_grok request: uses billing credits endpoint"
+assert_contains "$request" "Authorization: Bearer grok-session" "fetch_grok request: sends session token"
+assert_contains "$out" "Weekly" "fetch_grok 200: labels weekly period"
+assert_contains "$out" "54%" "fetch_grok 200: shows credit usage"
+assert_contains "$out" "reset_epoch=1894120817" "fetch_grok 200: resets at period end"
+
+# Unknown period types get a neutral label. Runs under production strict
+# mode; no '|| true', which would make the inner errexit inert.
+_grok_body='{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_MONTHLY","end":"2030-02-01T00:00:00Z"},"creditUsagePercent":12}}'
+out=$(
+  set -euo pipefail
+  GROK_HOME="$_tmp" fetch_grok 2>&1
+)
+assert_contains "$out" "Usage" "fetch_grok unknown period: uses neutral label"
+assert_contains "$out" "reset:" "fetch_grok unknown period: renders to completion"
+
+# A missing percentage is an error, not a fabricated 0% bar.
+_grok_body='{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","end":"2030-01-08T16:40:17.211+00:00"}}}'
+out=$(GROK_HOME="$_tmp" fetch_grok 2>&1) || true
+assert_contains "$out" "Grok usage data is unavailable" "fetch_grok missing percent: unavailable error"
+assert_not_contains "$out" "%" "fetch_grok missing percent: no usage bar"
+
+set_http_response "401" '{"error":"Invalid or expired credentials"}'
+out=$(GROK_HOME="$_tmp" fetch_grok 2>&1) || true
+assert_contains "$out" "session expired run: grok" "fetch_grok 401: session expired message"
+rm -rf "$_tmp" "$_capture"

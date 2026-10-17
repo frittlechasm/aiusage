@@ -54,7 +54,7 @@ curl -fsSL https://raw.githubusercontent.com/frittlechasm/aiusage/main/install.s
 - Single self-contained bash script — no build step, no daemon, no framework.
 - Reads local auth or quota state already present on your machine, then calls provider usage endpoints.
 - On macOS, Claude credentials are read from Keychain first, falling back to `~/.claude/.credentials.json` when no token can be read. Linux uses the credentials file.
-- Local sources include `~/.codex/auth.json`, `~/.gemini/oauth_creds.json`, `~/.local/share/opencode/auth.json`, Claude credentials, browser cookies for Cursor, and JetBrains quota files.
+- Local sources include `~/.codex/auth.json`, `~/.gemini/oauth_creds.json`, `~/.local/share/opencode/auth.json`, `~/.grok/auth.json`, Claude credentials, browser cookies for Cursor, and JetBrains quota files.
 - If auth is missing, expired, or the upstream endpoint changed, that provider is shown as unavailable or returns an error line.
 
 ## Provider notes
@@ -68,11 +68,13 @@ curl -fsSL https://raw.githubusercontent.com/frittlechasm/aiusage/main/install.s
 | JetBrains | AI credit usage from local IDE quota state | `AIAssistantQuotaManager2.xml` |
 | Copilot | AI Credits usage, with legacy `Premium`, `Chat`, and `Completions` quotas when applicable | `COPILOT_GITHUB_TOKEN` or `copilot login` |
 | OpenCode Go | `5h`, `Weekly`, and `Monthly` usage | `opencode` login credentials, `OPENCODE_GO_API_KEY`, or `OPENCODE_API_KEY` |
+| Grok | Weekly credit usage | `grok login` session in `~/.grok/auth.json` (or `$GROK_HOME`) |
 
 - Claude limit resets can be redeemed in **Settings → Usage** on Claude web or Desktop; the CLI shows the remaining count and available expiry dates.
 - Cursor session lookup is automatic from Firefox, Chrome, Arc, Brave, Edge, or Helium.
 - Copilot uses AI Credits for current plans and retains premium-request tracking for legacy annual plans.
 - Copilot plans with unlimited or org-managed quotas may show only the plan name instead of bars.
+- The Grok CLI session lasts about 6 hours and refreshes only while `grok` runs. After an idle period, run `grok` once to refresh it. `XAI_API_KEY` cannot read subscription usage.
 - Provider endpoints and response shapes can change over time.
 
 ## Adding providers
