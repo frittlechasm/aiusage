@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ── config ──────────────────────────────────────────────
-VERSION="0.2.0"
+VERSION="0.3.0"
 UPDATE_RELEASE_API_URL="https://api.github.com/repos/frittlechasm/aiusage/releases/latest"
 UPDATE_RAW_BASE_URL="https://raw.githubusercontent.com/frittlechasm/aiusage"
 BAR_WIDTH=20
