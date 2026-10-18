@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Bash 5.2+ expands & in ${var//pat/rep} to the match; keep replacements literal.
+shopt -u patsub_replacement 2>/dev/null || true
 
 # ── config ──────────────────────────────────────────────
 VERSION="0.3.0"
@@ -522,11 +524,11 @@ find_jetbrains_quota_file() {
 }
 
 xml_unescape() {
-  local value="${1:-}"
+  local value="${1:-}" apos="'"
   value="${value//&quot;/\"}"
   value="${value//&#10;/$'\n'}"
   value="${value//&#13;/$'\r'}"
-  value="${value//&apos;/\'}"
+  value="${value//&apos;/$apos}"
   value="${value//&lt;/<}"
   value="${value//&gt;/>}"
   value="${value//&amp;/&}"
