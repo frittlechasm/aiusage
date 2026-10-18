@@ -14,6 +14,12 @@ printf '#!/usr/bin/env sh\nexit 0\n' >"$deps_bin/curl"
 chmod 755 "$deps_bin/jq" "$deps_bin/curl"
 test_path="$deps_bin:/usr/bin:/bin"
 
+# PATH without curl or jq. Plain /bin is not enough: usrmerge distros link it to /usr/bin.
+no_deps_path="$tmp_root/no-deps-path"
+mkdir -p "$no_deps_path"
+ln -s "$(command -v cat)" "$no_deps_path/cat"
+ln -s "$(command -v uname)" "$no_deps_path/uname"
+
 # ── provider_is_known ─────────────────────────────────────
 
 assert_exit_0 "provider_is_known: claude"    provider_is_known "claude"
@@ -89,7 +95,7 @@ assert_contains "$out" "Usage:" "AIUSAGE_SOURCED env: --help still shows usage h
 
 # ── CLI: missing dependencies (subprocess) ────────────────
 
-out=$(env PATH="/bin" /bin/bash "$AIUSAGE_SCRIPT" claude 2>&1); code=$?
+out=$(env PATH="$no_deps_path" /bin/bash "$AIUSAGE_SCRIPT" claude 2>&1); code=$?
 assert_eq "1" "$code" "missing deps: exits 1"
 assert_contains "$out" "missing required dependencies" "missing deps: reports dependency error"
 assert_contains "$out" "Install missing dependencies" "missing deps: prints install hint"

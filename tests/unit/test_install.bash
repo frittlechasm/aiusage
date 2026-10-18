@@ -14,6 +14,12 @@ printf '#!/usr/bin/env sh\nexit 0\n' >"$deps_bin/curl"
 chmod 755 "$deps_bin/jq" "$deps_bin/curl"
 test_path="$deps_bin:/usr/bin:/bin"
 
+# PATH without curl or jq. Plain /bin is not enough: usrmerge distros link it to /usr/bin.
+no_deps_path="$tmp_root/no-deps-path"
+mkdir -p "$no_deps_path"
+ln -s "$(command -v cat)" "$no_deps_path/cat"
+ln -s "$(command -v uname)" "$no_deps_path/uname"
+
 # ── no-argument install path ──────────────────────────────
 
 home_dir="$tmp_root/default-home"
@@ -92,7 +98,7 @@ env PATH="$test_path" sh "$AIUSAGE_INSTALLER" --source "$tmp_root/missing" --dir
 code=$?
 assert_eq "1" "$code" "install: missing source exits 1"
 
-out=$(env PATH="/bin" /bin/sh "$AIUSAGE_INSTALLER" --source "$AIUSAGE_SCRIPT" --dir "$tmp_root/no-deps-bin" 2>&1)
+out=$(env PATH="$no_deps_path" /bin/sh "$AIUSAGE_INSTALLER" --source "$AIUSAGE_SCRIPT" --dir "$tmp_root/no-deps-bin" 2>&1)
 code=$?
 assert_eq "1" "$code" "install: missing deps exits 1"
 assert_contains "$out" "missing required dependencies" "install: missing deps reports dependency error"

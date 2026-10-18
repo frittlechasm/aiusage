@@ -108,6 +108,7 @@ printf 'x' >"$quota_xml"
 
 found=$(
   set -e
+  unset XDG_CONFIG_HOME # CI runners set it, which hides the fake HOME/.config
   HOME="$fake_home" find_jetbrains_quota_file
 )
 assert_contains "$found" "AIAssistantQuotaManager2.xml" "jetbrains_quota: finds quota file under fake HOME"
